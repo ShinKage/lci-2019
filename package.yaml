@@ -1,6 +1,6 @@
 name:                lab
 version:             0.1.0.0
-github:              "ShinKage/lab"
+github:              "ShinKage/lci-2019"
 license:             BSD3
 author:              "Giuseppe Lomurno"
 maintainer:          "lomurno.giuseppe97@gmail.com"
@@ -26,6 +26,7 @@ dependencies:
   - llvm-hs
   - llvm-hs-pretty
   - prettyprinter
+  - prettyprinter-ansi-terminal
   - singletons
   - megaparsec
   - parser-combinators

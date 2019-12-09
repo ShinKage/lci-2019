@@ -1,4 +1,4 @@
-# Final Project for LCE 2019-2020
+# Final Project for LCI 2019-2020
 
 A visibile LLVM toolchain is required.
 

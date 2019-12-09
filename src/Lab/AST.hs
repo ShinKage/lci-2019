@@ -18,11 +18,12 @@
 --
 -------------------------------------------------------------------------------
 
-module Lab.AST (AST(..)) where
+module Lab.AST (AST(..), prettyAST) where
 
 import Data.Kind
 import Data.List.Extra
 import Data.Text.Prettyprint.Doc
+import Data.Text.Prettyprint.Doc.Render.Terminal
 import Data.Text.Prettyprint.Doc.Symbols.Unicode
 
 import Lab.Types
@@ -58,17 +59,17 @@ data AST :: [LType] -> LType -> Type where
   Fix :: AST env (LArrow a a) -> AST env a
 deriving instance Show (AST env ty)
 
-instance Pretty (AST '[] ty) where
-  pretty = prettyAST
+-- instance Pretty (AST '[] ty) where
+--   pretty = prettyAST
 
 -- | Pretty printing for the AST.
-prettyAST :: AST env ty -> Doc ann
+prettyAST :: AST env ty -> Doc AnsiStyle
 prettyAST = snd . go 0 initPrec
  where
-  go :: Int -> Rational -> AST env ty -> (Int, Doc ann)
-  go i _ (IntE  n) = (i, pretty n)
-  go i _ (BoolE b) = (i, pretty b)
-  go i _ UnitE     = (i, pretty "unit")
+  go :: Int -> Rational -> AST env ty -> (Int, Doc AnsiStyle)
+  go i _ (IntE  n) = (i, annotate bold (pretty n))
+  go i _ (BoolE b) = (i, annotate bold (pretty b))
+  go i _ UnitE     = (i, annotate bold (pretty "unit"))
   go i prec (PrimUnaryOp op e1) =
     (i, maybeParens (prec >= opPrec op) $ pretty op <> snd (go i (opPrecArg op) e1))
   go i prec (PrimBinaryOp op e1 e2) =
@@ -82,11 +83,12 @@ prettyAST = snd . go 0 initPrec
       , pretty "then" <+> snd (go i initPrec e1)
       , pretty "else" <+> snd (go i initPrec e2)
       ])
-  go i _ (Var v) = (i, pretty '#' <> pretty (elemToIntegral v :: Integer))
+  go i _ (Var v) = let v' = elemToIntegral v :: Int in
+                       (i, colorVar v' $ pretty '#' <> pretty v')
   go i prec (Lambda ty body) = case go i initPrec body of
     (i_body, doc_body) ->
-      (i + 1, maybeParens (prec >= lambdaPrec) $
-        fillSep [ pretty 'λ' <> pretty '#' <> pretty i_body <+> pretty ':'
+      (i_body + 1, maybeParens (prec >= lambdaPrec) $
+        fillSep [ pretty 'λ' <> colorVar i_body (pretty '#' <> pretty i_body) <+> pretty ':'
                              <+> pretty ty <> pretty '.'
                 , doc_body
                 ])
@@ -96,3 +98,9 @@ prettyAST = snd . go 0 initPrec
     snd (go i initPrec f) <> comma <> snd (go i initPrec s))
   go i prec (Fix body) = (i, maybeParens (prec >= appPrec) $
     pretty "fix" <+> snd (go i initPrec body))
+
+  colors :: [Color]
+  colors = cycle [Red, Green, Yellow, Blue, Magenta, Cyan]
+
+  colorVar :: Int -> Doc AnsiStyle -> Doc AnsiStyle
+  colorVar i = annotate (color $ colors !! i)

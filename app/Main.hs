@@ -13,6 +13,7 @@ import Data.Text
 import qualified Data.Text.IO as T
 import qualified Data.Text.Lazy.IO as TL
 import qualified Data.Text.Prettyprint.Doc as PP
+import qualified Data.Text.Prettyprint.Doc.Render.Terminal as PP
 import qualified Text.Megaparsec as P
 import qualified Data.ByteString.Char8 as BS
 import Data.Singletons
@@ -48,7 +49,7 @@ repl = do
     case cmd of
       "llvm"    -> genLLVM sty ast
       "eval"    -> evalAST ast
-      "pretty"  -> liftIO $ print $ PP.pretty ast
+      "pretty"  -> liftIO $ PP.putDoc $ prettyAST ast
       "jit"     -> runJit sty ast
       "compile" -> genASM sty ast
       _         -> liftIO $ putStrLn "invalid command"
@@ -64,7 +65,7 @@ genLLVM :: MonadIO m => SLType ty -> AST '[] ty -> m ()
 genLLVM ty = liftIO . TL.putStrLn . PP.ppllvm . wrapper ty
 
 evalAST :: MonadIO m => AST '[] ty -> m ()
-evalAST = liftIO . print . PP.pretty . expr . eval
+evalAST = liftIO . PP.putDoc . prettyAST . expr . eval
 
 jit :: Context -> (EE.MCJIT -> IO a) -> IO a
 jit c = EE.withMCJIT c (Just 0) Nothing Nothing Nothing
