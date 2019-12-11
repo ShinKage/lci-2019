@@ -33,6 +33,7 @@ dependencies:
   - mtl
   - bytestring
   - libffi
+  - haskeline
 
 library:
   source-dirs: src

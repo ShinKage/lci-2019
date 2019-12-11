@@ -59,9 +59,6 @@ data AST :: [LType] -> LType -> Type where
   Fix :: AST env (LArrow a a) -> AST env a
 deriving instance Show (AST env ty)
 
--- instance Pretty (AST '[] ty) where
---   pretty = prettyAST
-
 -- | Pretty printing for the AST.
 prettyAST :: AST env ty -> Doc AnsiStyle
 prettyAST = snd . go 0 initPrec

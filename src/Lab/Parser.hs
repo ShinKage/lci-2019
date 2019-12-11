@@ -125,7 +125,13 @@ fixpoint :: Parser Untyped
 fixpoint = UFix <$> (tokFix *> parseLanguage)
 
 lambda :: Parser Untyped
-lambda = ULambda <$> (tokLambda *> identifier) <*> (tokColon *> types) <*> (tokDot *> parseLanguage)
+lambda = do
+  tokLambda
+  args <- sepBy1 annotatedType tokComma
+  tokDot
+  body <- parseLanguage
+  pure $ foldr (\(name, ty) acc -> ULambda name ty acc) body args
+    where annotatedType = (,) <$> identifier <*> (tokColon *> types)
 
 parseLet :: Parser Untyped
 parseLet = do
