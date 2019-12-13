@@ -101,3 +101,6 @@ prettyAST = snd . go 0 initPrec
 
   colorVar :: Int -> Doc AnsiStyle -> Doc AnsiStyle
   colorVar i = annotate (color $ colors !! i)
+
+-- WHY IT DOES NOT WORK?
+-- let f : int -> int -> int = \x:int,y:int.let g:int->int->int=(\a:int,b:int.x+y+a)

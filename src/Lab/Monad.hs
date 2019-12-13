@@ -22,5 +22,8 @@ quit = liftIO $ putStrLn "Goodbye."
 renderPretty :: MonadIO m => Doc AnsiStyle -> m ()
 renderPretty = liftIO . renderIO stdout . layoutSmart defaultLayoutOptions . (<> hardline)
 
+renderString :: (Show a, MonadIO m) => a -> m ()
+renderString = liftIO . print
+
 runLab :: Lab a -> InputT IO (Either LabError a)
 runLab = runExceptT . unLab
