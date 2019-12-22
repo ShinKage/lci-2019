@@ -18,27 +18,25 @@
 --
 -------------------------------------------------------------------------------
 
-module Lab.LLVM (wrapper, codegen) where
+module Lab.LLVM where
 
 import Prelude hiding (EQ, and, or)
 import Data.String
 import Control.Monad.State
-import Control.Monad.Fix
 import Control.Monad.Except
 import Data.Singletons
-import Data.Singletons.Decide
 import LLVM.AST (Module)
 import LLVM.AST.Constant as LLVM
 import LLVM.AST.Name as LLVM
-import LLVM.AST.Operand (Operand)
+import LLVM.AST.Operand (Operand(..))
 import LLVM.AST.IntegerPredicate as LLVM
 import LLVM.AST.Type as LLVM
 import LLVM.AST.Typed as LLVM
 import LLVM.IRBuilder as LLVM
 
-import Lab.AST
 import Lab.Decls
 import Lab.Types
+import Lab.Errors
 
 data EnvState = EnvState { decls :: [Operand]
                          , args :: [Operand]
@@ -49,34 +47,35 @@ emptyEnvState :: EnvState
 emptyEnvState = EnvState [] [] 0
 
 -- | Wraps the generated code in a single function.
-wrapper :: (MonadFix m, MonadError String m) => SLType ty -> CodegenEnv -> m Module
-wrapper ty cenv = buildModuleT "exe" $ flip runStateT emptyEnvState $ mdo
+wrapper :: (MonadFix m, MonadError LabError m) => SLType ty -> CodegenEnv -> m Module
+wrapper ty cenv = buildModuleT "exe" $ flip runStateT emptyEnvState $ do
   decls' <- topLevelFunctions (decl cenv)
   function "expr" [] (labToLLVM $ fromSing ty) $ \[] -> mdo
-    block `named` "entry"
+    _ <- block `named` "entry"
     modify $ \env -> env { decls = decls' }
     e' <- codegen (expr cenv)
-    case ty %~ SLUnit of
-      Proved Refl -> retVoid
-      Disproved _ -> LLVM.ret e'
+    ret e'
+    -- case ty %~ SLUnit of
+    --   Proved Refl -> retVoid
+    --   Disproved _ -> LLVM.ret e'
 
 labToLLVM :: LType -> Type
 labToLLVM LInt  = i32
 labToLLVM LBool = i1
-labToLLVM LUnit = LLVM.void
+labToLLVM LUnit = ptr i8
 labToLLVM (LProduct a b) = StructureType False [labToLLVM a, labToLLVM b]
 labToLLVM (LArrow _ _) = error "Expression must return a value"
 labToLLVM LVoid = error "Void cannot be instantiated"
 
-topLevelFunctions :: (MonadState EnvState m, MonadError String m, MonadFix m, MonadModuleBuilder m)
+topLevelFunctions :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadModuleBuilder m)
                   => [Declaration]
                   -> m [Operand]
 topLevelFunctions decls' = forM decls' $ \dec -> do
     let argTypes = getArgTypes (argsType dec)
     name <- getFunName
     function name argTypes (labToLLVM $ retType dec) $ \args' -> mdo
-      modify $ \env -> env { args = args' }
-      block `named` "entry"
+      modify $ \env -> env { args = reverse args' }
+      _ <- block `named` "entry"
       body' <- codegen (body dec)
       modify $ \env -> env { args = [] }
       ret body'
@@ -94,7 +93,7 @@ topLevelFunctions decls' = forM decls' $ \dec -> do
         getArgTypes = zipWith (\i arg -> (labToLLVM arg, argName i)) [0..]
 
 -- | LLVM IR generation for the typed AST.
-codegen :: (MonadState EnvState m, MonadError String m, MonadFix m, MonadIRBuilder m)
+codegen :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
         => CodegenAST
         -> m Operand
 codegen (CIntE n)                = litInt n
@@ -104,19 +103,39 @@ codegen (CPrimUnaryOp op e)      = unaryOp op e
 codegen (CPrimBinaryOp op e1 e2) = binaryOp op e1 e2
 codegen (CCond c e1 e2)          = conditional c e1 e2
 codegen (CVar i)                 = varBinding i
-codegen (CCall i params)         = funCall i params
 codegen (CPair f s)              = pairStruct f s
+codegen (CLambda _ _ _)          = throwError (CodegenError "Lambda not lifted")
+codegen app@(CApp _ _) = do
+  let (f, as) = viewApp app
+  f' <- codegen f
+  args' <- traverse (fmap (, []) . codegen) as
+  call f' args'
+codegen (CCall i) = do
+  ds <- gets decls
+  case index' i ds of
+    Just d -> pure d
+    Nothing -> throwError (CodegenError "Function index out of range")
 
-varBinding :: (MonadState EnvState m, MonadError String m, MonadFix m, MonadIRBuilder m)
+-- CApp (CApp (CCall 0) (CIntE 42)) (CIntE 69)
+-- Decl {argsType = [LInt], retType = LArrow LInt LInt, body = CCall 1}
+-- Decl {argsType = [LInt], retType = LInt, body = CPrimUnaryOp PrimNeg (CVar 0)}
+
+viewApp :: CodegenAST -> (CodegenAST, [CodegenAST])
+viewApp = go []
+  where
+    go xs (CApp a b) = go (b : xs) a
+    go xs f = (f, xs)
+
+varBinding :: (MonadState EnvState m, MonadError LabError m, MonadIRBuilder m)
            => Int
            -> m Operand
 varBinding i = do
   args' <- gets args
   case index' i args' of
     Just arg -> pure arg
-    Nothing  -> throwError "Variable index out of range"
+    Nothing  -> throwError $ CodegenError "Variable index out of range"
 
-funCall :: (MonadState EnvState m, MonadError String m, MonadFix m, MonadIRBuilder m)
+funCall :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
         => Int
         -> [CodegenAST]
         -> m Operand
@@ -125,7 +144,7 @@ funCall i params = do
   params' <- traverse (fmap (, []) . codegen) params
   case index' i ds of
     Just d  -> call d params'
-    Nothing -> throwError "Function index out of range"
+    Nothing -> throwError $ CodegenError "Function index out of range"
 
 litInt :: MonadIRBuilder m => Integer -> m Operand
 litInt n = pure $ int32 n
@@ -134,9 +153,9 @@ litBool :: MonadIRBuilder m => Bool -> m Operand
 litBool b = pure $ bit $ if b then 1 else 0
 
 litUnit :: MonadIRBuilder m => m Operand
-litUnit = litBool True
+litUnit = pure $ ConstantOperand (Null (ptr i8))
 
-pairStruct :: (MonadState EnvState m, MonadError String m, MonadFix m, MonadIRBuilder m)
+pairStruct :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
            => CodegenAST
            -> CodegenAST
            -> m Operand
@@ -147,7 +166,7 @@ pairStruct f s = do
   onlyFirst <- insertValue agg f' [0]
   insertValue onlyFirst s' [1]
 
-conditional :: (MonadState EnvState m, MonadError String m, MonadFix m, MonadIRBuilder m)
+conditional :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
             => CodegenAST
             -> CodegenAST
             -> CodegenAST
@@ -165,7 +184,7 @@ conditional c e1 e2 = mdo
   phi [(e1', ifThen), (e2', ifElse)]
 
 
-unaryOp :: (MonadState EnvState m, MonadError String m, MonadFix m, MonadIRBuilder m)
+unaryOp :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
         => UnaryOp arg ret
         -> CodegenAST
         -> m Operand
@@ -177,7 +196,7 @@ unaryOp op e = do
     PrimFst -> extractValue e' [0]
     PrimSnd -> extractValue e' [1]
 
-binaryOp :: (MonadState EnvState m, MonadError String m, MonadFix m, MonadIRBuilder m)
+binaryOp :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
          => BinaryOp arg1 arg2 ret
          -> CodegenAST
          -> CodegenAST

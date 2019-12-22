@@ -34,6 +34,7 @@ dependencies:
   - bytestring
   - libffi
   - haskeline
+  - storable-tuple
 
 library:
   source-dirs: src

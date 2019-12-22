@@ -4,13 +4,19 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Main where
 
+import Foreign.Ptr
+import Foreign.Storable.Tuple ()
 import Foreign.LibFFI
+import Foreign.LibFFI.Base
+import Foreign.LibFFI.FFITypes
+import Foreign.LibFFI.Internal
+import Foreign.Storable
 import Data.Text
-import qualified Data.Text.IO as T
 import qualified Data.Text.Lazy.IO as TL
 import Data.Text.Prettyprint.Doc ((<+>))
 import qualified Data.Text.Prettyprint.Doc as PP
@@ -35,7 +41,10 @@ import LLVM.Analysis
 import LLVM.Target
 import qualified LLVM.ExecutionEngine as EE
 import Control.Monad.Except
+import Control.Monad.Writer
+import Control.Monad.State
 import System.Console.Haskeline
+import Data.Singletons.Prelude hiding (Elem)
 
 main :: IO ()
 main = runInputT defaultSettings $
@@ -55,10 +64,11 @@ repl = prompt "> " >>= \case
           Just "untyped" -> renderString uast >> loop uast sty ast
           Just "typed"   -> printAST sty ast >> loop uast sty ast
           Just "eval"    -> evalAST ast >> loop uast sty ast
+          Just "step"    -> stepAST ast >> loop uast sty ast
           Just "pretty"  -> renderPretty (prettyAST ast) >> loop uast sty ast
-          -- Just "llvm"    -> genLLVM sty ast >> loop uast sty ast
-          -- Just "jit"     -> runJit sty ast >> loop uast sty ast
-          -- Just "compile" -> genASM sty ast >> loop uast sty ast
+          Just "llvm"    -> genLLVM sty ast >> loop uast sty ast
+          Just "jit"     -> runJit sty ast >> loop uast sty ast
+          Just "compile" -> genASM sty ast >> loop uast sty ast
           Just "quit"    -> quit
           Just _         -> liftIO (putStrLn "invalid command") >> loop uast sty ast
           Nothing        -> pure ()
@@ -70,41 +80,66 @@ printAST :: MonadIO m => Sing ty -> AST '[] ty -> m ()
 printAST sty ast =
   renderPretty $ PP.pretty (show ast) <+> PP.pretty ("::" :: String) <+> PP.pretty sty
 
--- genLLVM :: MonadIO m => SLType ty -> AST '[] ty -> m ()
--- genLLVM ty = liftIO . TL.putStrLn . PP.ppllvm . wrapper ty
+genLLVM :: (MonadError LabError m, MonadFix m, MonadIO m) => SLType ty -> AST '[] ty -> m ()
+genLLVM ty ast = do
+  let (code, ds) = flip evalState 0 . runWriterT . liftLam . closureConv . smash $ fromAST SNil ast
+  m <- wrapper ty $ Env (Prelude.reverse ds) code
+  liftIO . TL.putStrLn . PP.ppllvm $ m
 
 evalAST :: MonadIO m => AST '[] ty -> m ()
 evalAST = renderPretty . prettyAST . Lab.Eval.expr . eval
 
--- jit :: Context -> (EE.MCJIT -> IO a) -> IO a
--- jit c = EE.withMCJIT c (Just 0) Nothing Nothing Nothing
+stepAST :: MonadIO m => AST '[] ty -> m ()
+stepAST = renderPretty . PP.vsep . fmap prettyStep . stepDescent
+  where stepDescent :: AST '[] ty -> [Step ty]
+        stepDescent e = StepAST e : case step e of
+          StepAST e' -> stepDescent e'
+          StepValue e' -> [StepAST $ Lab.Eval.expr e']
 
--- runJit :: MonadIO m => SLType ty -> AST '[] ty -> m ()
--- runJit ty ast = liftIO $
---   withContext $ \context ->
---   withModuleFromAST context (wrapper ty ast) $ \mod ->
---   withPassManager defaultPassSetSpec $ \pm -> do
---     verify mod
---     s <- moduleLLVMAssembly mod
---     BS.putStrLn s
---     jit context $ \executionEngine ->
---       EE.withModuleInEngine executionEngine mod $ \ee ->
---       EE.getFunction ee (AST.Name "f") >>= \case
---         Just fn -> case ty of
---           SLInt -> callFFI fn retInt [] >>= print
---           SLBool -> fmap (/= 0) (callFFI fn retInt []) >>= print
---           SLUnit -> callFFI fn retVoid []
---           _ -> error "Not implemented yet"
---         Nothing -> putStrLn "Error?"
--- 
--- genASM :: MonadIO m => SLType ty -> AST '[] ty -> m ()
--- genASM ty ast = liftIO $
---   withContext $ \context ->
---   withModuleFromAST context (wrapper ty ast) $ \mod ->
---   withPassManager defaultPassSetSpec $ \pm -> do
---     verify mod
---     s <- moduleLLVMAssembly mod
---     BS.putStrLn s
---     withHostTargetMachineDefault $ \tm -> do
---       gen <- moduleTargetAssembly tm mod
---       BS.putStrLn gen
+jit :: Context -> (EE.MCJIT -> IO a) -> IO a
+jit c = EE.withMCJIT c (Just 0) Nothing Nothing Nothing
+
+runJit :: (MonadError LabError m, MonadFix m, MonadIO m) => SLType ty -> AST '[] ty -> m ()
+runJit ty ast = do
+  let (code, ds) = flip evalState 0 . runWriterT . liftLam . closureConv . smash $ fromAST SNil ast
+  m <- wrapper ty $ Env (Prelude.reverse ds) code
+  liftIO $ withContext $ \context ->
+    withModuleFromAST context m $ \m' ->
+    withPassManager defaultPassSetSpec $ \_ -> do
+      verify m'
+      s <- moduleLLVMAssembly m'
+      BS.putStrLn s
+      jit context $ \executionEngine ->
+        EE.withModuleInEngine executionEngine m' $ \ee ->
+        EE.getFunction ee (AST.Name "expr") >>= \case
+          Just fn -> ffiRet ty $ \(_, retty, free) -> do
+            c <- callFFI fn retty []
+            print c
+            free
+          Nothing -> putStrLn "Error?"
+
+-- FIXME: Nested pairs
+ffiRet :: SLType ty -> (forall t. (Show t, Storable t) => (Ptr CType, RetType t, IO ()) -> IO r) -> IO r
+ffiRet SLInt k = k (ffi_type_hs_int, retInt, pure ())
+ffiRet SLBool k = k (ffi_type_hs_int, mkStorableRetType ffi_type_hs_int :: RetType Bool, pure ())
+ffiRet SLUnit k = k (ffi_type_pointer, mkStorableRetType ffi_type_pointer :: RetType (), pure ())
+ffiRet (SLProduct a b) k =
+  ffiRet a $ \(r1, _ :: RetType a, f1) ->
+  ffiRet b $ \(r2, _ :: RetType b, f2) -> do
+    (r, f) <- newStructCType [r1, r2]
+    k (r, mkStorableRetType r :: RetType (a, b), f1 >> f2 >> f)
+ffiRet _ _ = error "Not a value"
+
+genASM :: (MonadError LabError m, MonadFix m, MonadIO m) => SLType ty -> AST '[] ty -> m ()
+genASM ty ast = do
+  let (code, ds) = flip evalState 0 . runWriterT . liftLam . closureConv . smash $ fromAST SNil ast
+  m <- wrapper ty $ Env (Prelude.reverse ds) code
+  liftIO $ withContext $ \context ->
+    withModuleFromAST context m $ \m' ->
+    withPassManager defaultPassSetSpec $ \_ -> do
+      verify m'
+      s <- moduleLLVMAssembly m'
+      BS.putStrLn s
+      withHostTargetMachineDefault $ \tm -> do
+        gen <- moduleTargetAssembly tm m'
+        BS.putStrLn gen

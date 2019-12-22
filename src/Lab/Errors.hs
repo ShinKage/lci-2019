@@ -12,6 +12,7 @@ data LabError = ExpectedType (SomeSing LType) (SomeSing LType) String
               | PairRequired (SomeSing LType) String
               | UndefinedReference String
               | ParseError String
+              | CodegenError String
 
 prettyError :: LabError -> Doc AnsiStyle
 prettyError (ExpectedType (SomeSing t1) (SomeSing t2) msg) =
@@ -39,6 +40,7 @@ prettyError (PairRequired (SomeSing t) msg) =
 prettyError (UndefinedReference name) =
   pretty "The name" <+> dquotes (annotate (color Red) (pretty name)) <+> pretty "is undefined in this context"
 prettyError (ParseError msg) = pretty msg
+prettyError (CodegenError msg) = pretty msg
 
 expectedType :: SLType t1 -> SLType t2 -> String -> LabError
 expectedType st1 st2 = ExpectedType (SomeSing st1) (SomeSing st2)

@@ -30,6 +30,10 @@ data Elem :: [a] -> a -> Type where
   There :: Elem xs x -> Elem (y : xs) x
 deriving instance Show (Elem xs x)
 
+index :: Elem xs x -> SList xs -> Sing x
+index Here (SCons x _) = x
+index (There prf) (SCons _ xs) = index prf xs
+
 -- | Recovers the position inside the list from the proof.
 elemToIntegral :: Integral n => Elem xs x -> n
 elemToIntegral Here        = 0

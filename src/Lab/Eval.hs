@@ -20,8 +20,10 @@
 --
 -------------------------------------------------------------------------------
 
-module Lab.Eval (Value(..), eval) where
+module Lab.Eval (Value(..), Step(..), eval, step, prettyStep) where
 
+import Data.Text.Prettyprint.Doc
+import Data.Text.Prettyprint.Doc.Render.Terminal
 import Data.Kind
 import Data.List.Extra
 import Data.Singletons.Prelude.List hiding (Elem, Length)
@@ -190,3 +192,121 @@ shifts prefix = go LZ
 
 unfix :: AST '[] (LArrow a a) -> Concrete (LArrow a a) -> AST '[] a
 unfix lam v = v $ Fix lam
+
+data Step :: LType -> Type where
+  StepAST :: AST '[] a -> Step a
+  StepValue :: Value a -> Step a
+
+prettyStep :: Step a -> Doc AnsiStyle
+prettyStep (StepAST ast) = prettyAST ast
+prettyStep (StepValue v) = prettyAST (expr v)
+
+-- | Evaluation function for Lab.
+step :: AST '[] a -> Step a
+step e@(IntE  n)    = StepValue (Value e n)
+step e@(BoolE b)    = StepValue (Value e b)
+step UnitE          = StepValue (Value UnitE ())
+step (Cond c e1 e2) = case step c of
+  StepAST c'   -> StepAST (Cond c' e1 e2)
+  StepValue c' -> StepAST (if val c' then e1 else e2)
+step (Var prf) = \case {} $ prf -- Empty case because an Elem instance is impossible with an empty context
+step e@(Lambda _ body) = StepValue (Value e (`subst` body))
+step (App lam arg) = case step lam of
+  StepAST lam'   -> StepAST (App lam' arg)
+  StepValue lam' -> case step arg of
+    StepAST arg'   -> StepAST (App (expr lam') arg')
+    StepValue arg' -> StepAST (val lam' $ expr arg')
+step (Fix e) = case step e of
+  StepAST e'   -> StepAST (Fix e')
+  StepValue e' -> StepAST $ unfix (expr e') (val e')
+step (Pair f s) = case step f of
+  StepAST f' -> StepAST (Pair f' s)
+  StepValue f' -> case step s of
+    StepAST s' -> StepAST (Pair (expr f') s')
+    StepValue s' -> StepValue $ Value (Pair (expr f') (expr s')) (val f', val s')
+step (PrimUnaryOp PrimNeg e) = case step e of
+  StepAST e' -> StepAST (PrimUnaryOp PrimNeg e')
+  StepValue e' -> let v = negate $ val e' in StepValue $ Value (IntE v) v
+step (PrimUnaryOp PrimNot e) = case step e of
+  StepAST e' -> StepAST (PrimUnaryOp PrimNot e')
+  StepValue e' -> let v = not $ val e' in StepValue $ Value (BoolE v) v
+step (PrimUnaryOp PrimFst e) = case step e of
+  StepAST e' -> StepAST (PrimUnaryOp PrimFst e')
+  StepValue (Value (Pair e' _) _) -> StepAST e'
+  _ -> error "impossible match"
+step (PrimUnaryOp PrimSnd e) = case step e of
+  StepAST e' -> StepAST (PrimUnaryOp PrimSnd e')
+  StepValue (Value (Pair _ e') _) -> StepAST e'
+  _ -> error "impossible match"
+step (PrimBinaryOp PrimAdd e1 e2) = case step e1 of
+  StepAST e1' -> StepAST (PrimBinaryOp PrimAdd e1' e2)
+  StepValue e1' -> case step e2 of
+    StepAST e2' -> StepAST (PrimBinaryOp PrimAdd (expr e1') e2')
+    StepValue e2' -> let v = (val e1') + (val e2') in StepValue $ Value (IntE v) v
+step (PrimBinaryOp PrimSub e1 e2) = case step e1 of
+  StepAST e1' -> StepAST (PrimBinaryOp PrimSub e1' e2)
+  StepValue e1' -> case step e2 of
+    StepAST e2' -> StepAST (PrimBinaryOp PrimSub (expr e1') e2')
+    StepValue e2' -> let v = (val e1') - (val e2') in StepValue $ Value (IntE v) v
+step (PrimBinaryOp PrimMul e1 e2) = case step e1 of
+  StepAST e1' -> StepAST (PrimBinaryOp PrimMul e1' e2)
+  StepValue e1' -> case step e2 of
+    StepAST e2' -> StepAST (PrimBinaryOp PrimMul (expr e1') e2')
+    StepValue e2' -> let v = (val e1') * (val e2') in StepValue $ Value (IntE v) v
+step (PrimBinaryOp PrimDiv e1 e2) = case step e1 of
+  StepAST e1' -> StepAST (PrimBinaryOp PrimDiv e1' e2)
+  StepValue e1' -> case step e2 of
+    StepAST e2' -> StepAST (PrimBinaryOp PrimDiv (expr e1') e2')
+    StepValue e2' -> let v = (val e1') `div` (val e2') in StepValue $ Value (IntE v) v
+step (PrimBinaryOp PrimAnd e1 e2) = case step e1 of
+  StepAST e1' -> StepAST (PrimBinaryOp PrimAnd e1' e2)
+  StepValue e1' -> case step e2 of
+    StepAST e2' -> StepAST (PrimBinaryOp PrimAnd (expr e1') e2')
+    StepValue e2' -> let v = (val e1') && (val e2') in StepValue $ Value (BoolE v) v
+step (PrimBinaryOp PrimOr e1 e2) = case step e1 of
+  StepAST e1' -> StepAST (PrimBinaryOp PrimOr e1' e2)
+  StepValue e1' -> case step e2 of
+    StepAST e2' -> StepAST (PrimBinaryOp PrimOr (expr e1') e2')
+    StepValue e2' -> let v = (val e1') || (val e2') in StepValue $ Value (BoolE v) v
+step (PrimBinaryOp PrimLT e1 e2) = case step e1 of
+  StepAST e1' -> StepAST (PrimBinaryOp PrimLT e1' e2)
+  StepValue e1' -> case step e2 of
+    StepAST e2' -> StepAST (PrimBinaryOp PrimLT (expr e1') e2')
+    StepValue e2' -> let v = (val e1') < (val e2') in StepValue $ Value (BoolE v) v
+step (PrimBinaryOp PrimGT e1 e2) = case step e1 of
+  StepAST e1' -> StepAST (PrimBinaryOp PrimGT e1' e2)
+  StepValue e1' -> case step e2 of
+    StepAST e2' -> StepAST (PrimBinaryOp PrimGT (expr e1') e2')
+    StepValue e2' -> let v = (val e1') > (val e2') in StepValue $ Value (BoolE v) v
+step (PrimBinaryOp PrimLE e1 e2) = case step e1 of
+  StepAST e1' -> StepAST (PrimBinaryOp PrimLE e1' e2)
+  StepValue e1' -> case step e2 of
+    StepAST e2' -> StepAST (PrimBinaryOp PrimLE (expr e1') e2')
+    StepValue e2' -> let v = (val e1') <= (val e2') in StepValue $ Value (BoolE v) v
+step (PrimBinaryOp PrimGE e1 e2) = case step e1 of
+  StepAST e1' -> StepAST (PrimBinaryOp PrimGE e1' e2)
+  StepValue e1' -> case step e2 of
+    StepAST e2' -> StepAST (PrimBinaryOp PrimGE (expr e1') e2')
+    StepValue e2' -> let v = (val e1') >= (val e2') in StepValue $ Value (BoolE v) v
+step (PrimBinaryOp PrimEq e1 e2) = case step e1 of
+  StepAST e1' -> StepAST (PrimBinaryOp PrimEq e1' e2)
+  StepValue e1' -> case step e2 of
+    StepAST e2' -> StepAST (PrimBinaryOp PrimEq (expr e1') e2')
+    StepValue e2' -> case (expr e1', expr e2') of
+      (IntE n, IntE m) -> let v = n == m in StepValue $ Value (BoolE v) v
+      (BoolE n, BoolE m) -> let v = n == m in StepValue $ Value (BoolE v) v
+      (UnitE, UnitE) -> StepValue $ Value (BoolE True) True
+      -- If we explicitly pattern match on conflicting cases, Haskell recognizes the conflicting constraint
+      -- but we have not found yet, a way to generate an absurd value.
+      _ -> error "impossible match"
+step (PrimBinaryOp PrimNeq e1 e2) = case step e1 of
+  StepAST e1' -> StepAST (PrimBinaryOp PrimNeq e1' e2)
+  StepValue e1' -> case step e2 of
+    StepAST e2' -> StepAST (PrimBinaryOp PrimNeq (expr e1') e2')
+    StepValue e2' -> case (expr e1', expr e2') of
+      (IntE n, IntE m) -> let v = n /= m in StepValue $ Value (BoolE v) v
+      (BoolE n, BoolE m) -> let v = n /= m in StepValue $ Value (BoolE v) v
+      (UnitE, UnitE) -> StepValue $ Value (BoolE False) False
+      -- If we explicitly pattern match on conflicting cases, Haskell recognizes the conflicting constraint
+      -- but we have not found yet, a way to generate an absurd value.
+      _ -> error "impossible match"

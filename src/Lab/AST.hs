@@ -18,13 +18,15 @@
 --
 -------------------------------------------------------------------------------
 
-module Lab.AST (AST(..), prettyAST) where
+module Lab.AST (AST(..), prettyAST, returnType) where
 
 import Data.Kind
 import Data.List.Extra
 import Data.Text.Prettyprint.Doc
 import Data.Text.Prettyprint.Doc.Render.Terminal
 import Data.Text.Prettyprint.Doc.Symbols.Unicode
+import Data.Singletons
+import Data.Singletons.Prelude hiding (Elem)
 
 import Lab.Types
 import Lab.Utils
@@ -58,6 +60,19 @@ data AST :: [LType] -> LType -> Type where
   -- | Fixpoint operator for recursive functions
   Fix :: AST env (LArrow a a) -> AST env a
 deriving instance Show (AST env ty)
+
+returnType :: SList env -> AST env ty -> SLType ty
+returnType _ (IntE _) = sing
+returnType _ (BoolE _) = sing
+returnType _ UnitE = sing
+returnType env (PrimUnaryOp op e) = unaryReturnType (returnType env e) op
+returnType env (PrimBinaryOp op e1 e2) = binaryReturnType (returnType env e1) (returnType env e2) op
+returnType env (Cond _ e1 _) = returnType env e1
+returnType env (Lambda ty body) = SLArrow ty (returnType (SCons ty env) body)
+returnType env (Var e) = index e env
+returnType env (App lam _) = case returnType env lam of SLArrow _ ty -> ty
+returnType env (Fix e) = case returnType env e of SLArrow _ ty -> ty
+returnType env (Pair e1 e2) = SLProduct (returnType env e1) (returnType env e2)
 
 -- | Pretty printing for the AST.
 prettyAST :: AST env ty -> Doc AnsiStyle

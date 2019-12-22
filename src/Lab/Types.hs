@@ -58,6 +58,12 @@ data UnaryOp :: LType -> LType -> Type where
 
 deriving instance Show (UnaryOp arg ret)
 
+unaryReturnType :: SLType arg -> UnaryOp arg ret -> SLType ret
+unaryReturnType _ PrimNeg = sing
+unaryReturnType _ PrimNot = sing
+unaryReturnType (SLProduct a _) PrimFst = a
+unaryReturnType (SLProduct _ b) PrimSnd = b
+
 instance Pretty (UnaryOp arg ret) where
   pretty PrimNeg = pretty '-'
   pretty PrimNot = pretty '¬'
@@ -81,6 +87,20 @@ data BinaryOp :: LType -> LType -> LType -> Type where
   PrimNeq :: BinaryOp ty ty LBool
 
 deriving instance Show (BinaryOp arg1 arg2 ret)
+
+binaryReturnType :: SLType arg1 -> SLType arg2 -> BinaryOp arg1 arg2 ret -> SLType ret
+binaryReturnType _ _ PrimAdd = sing
+binaryReturnType _ _ PrimSub = sing
+binaryReturnType _ _ PrimMul = sing
+binaryReturnType _ _ PrimDiv = sing
+binaryReturnType _ _ PrimAnd = sing
+binaryReturnType _ _ PrimOr = sing
+binaryReturnType _ _ PrimLT = sing
+binaryReturnType _ _ PrimGT = sing
+binaryReturnType _ _ PrimLE = sing
+binaryReturnType _ _ PrimGE = sing
+binaryReturnType _ _ PrimEq = sing
+binaryReturnType _ _ PrimNeq = sing
 
 instance Pretty (BinaryOp arg1 arg2 ret) where
   pretty PrimAdd = pretty '+'

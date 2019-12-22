@@ -11,7 +11,7 @@ import System.IO (stdout)
 import Lab.Errors
 
 newtype Lab a = Lab { unLab :: ExceptT LabError (InputT IO) a}
-  deriving (Monad, Functor, Applicative, MonadIO, MonadError LabError)
+  deriving (Monad, Functor, Applicative, MonadIO, MonadError LabError, MonadFix)
 
 prompt :: String -> Lab (Maybe String)
 prompt = Lab . lift . getInputLine
