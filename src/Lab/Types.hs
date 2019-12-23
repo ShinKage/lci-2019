@@ -44,7 +44,7 @@ instance Pretty LType where
   pretty LUnit = pretty "⊤"
   pretty LVoid = pretty "⊥"
   pretty (LProduct a b) = pretty a <+> pretty "⊗" <+> pretty b
-  pretty (LArrow arg ret) = pretty arg <+> pretty "→" <+> pretty ret
+  pretty (LArrow arg ret) = parens (pretty arg <+> pretty "→" <+> pretty ret)
 
 instance Pretty (SLType ty) where
   pretty = pretty . fromSing

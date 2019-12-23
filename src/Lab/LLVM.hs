@@ -1,4 +1,5 @@
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -34,6 +35,9 @@ import LLVM.AST.Type as LLVM
 import LLVM.AST.Typed as LLVM
 import LLVM.IRBuilder as LLVM
 
+import qualified LLVM.AST as AST
+import qualified LLVM.AST.CallingConvention as CC
+
 import Lab.Decls
 import Lab.Types
 import Lab.Errors
@@ -41,10 +45,12 @@ import Lab.Errors
 data EnvState = EnvState { decls :: [Operand]
                          , args :: [Operand]
                          , lastFun :: Int
+                         , lastFunOperand :: Maybe Operand
+                         , lastFunRet :: AST.Type
                          }
 
 emptyEnvState :: EnvState
-emptyEnvState = EnvState [] [] 0
+emptyEnvState = EnvState [] [] 0 Nothing LLVM.void
 
 -- | Wraps the generated code in a single function.
 wrapper :: (MonadFix m, MonadError LabError m) => SLType ty -> CodegenEnv -> m Module
@@ -70,15 +76,17 @@ labToLLVM LVoid = error "Void cannot be instantiated"
 topLevelFunctions :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadModuleBuilder m)
                   => [Declaration]
                   -> m [Operand]
-topLevelFunctions decls' = forM decls' $ \dec -> do
+topLevelFunctions decls' = forM decls' $ \dec -> mdo
     let argTypes = getArgTypes (argsType dec)
+    let retty = labToLLVM $ retType dec
     name <- getFunName
-    function name argTypes (labToLLVM $ retType dec) $ \args' -> mdo
-      modify $ \env -> env { args = reverse args' }
+    f <- function name argTypes retty $ \args' -> do
+      modify $ \env -> env { args = reverse args', lastFunOperand = Just f, lastFunRet = retty }
       _ <- block `named` "entry"
       body' <- codegen (body dec)
-      modify $ \env -> env { args = [] }
+      modify $ \env -> env { args = [], lastFunOperand = Nothing, lastFunRet = LLVM.void }
       ret body'
+    pure f
 
   where argName :: Int -> ParameterName
         argName i = fromString $ "arg_" ++ show i
@@ -105,20 +113,31 @@ codegen (CCond c e1 e2)          = conditional c e1 e2
 codegen (CVar i)                 = varBinding i
 codegen (CPair f s)              = pairStruct f s
 codegen (CLambda _ _ _)          = throwError (CodegenError "Lambda not lifted")
+codegen (CFix _)                 = throwError (CodegenError "Fix not lifted")
 codegen app@(CApp _ _) = do
   let (f, as) = viewApp app
   f' <- codegen f
   args' <- traverse (fmap (, []) . codegen) as
-  call f' args'
+  retty <- gets lastFunRet
+  -- call f' args'
+  let instr = AST.Call {
+    AST.tailCallKind = Nothing
+  , AST.callingConvention = CC.C
+  , AST.returnAttributes = []
+  , AST.function = Right f'
+  , AST.arguments = args'
+  , AST.functionAttributes = []
+  , AST.metadata = []
+  }
+  emitInstr retty instr
 codegen (CCall i) = do
   ds <- gets decls
   case index' i ds of
     Just d -> pure d
     Nothing -> throwError (CodegenError "Function index out of range")
-
--- CApp (CApp (CCall 0) (CIntE 42)) (CIntE 69)
--- Decl {argsType = [LInt], retType = LArrow LInt LInt, body = CCall 1}
--- Decl {argsType = [LInt], retType = LInt, body = CPrimUnaryOp PrimNeg (CVar 0)}
+codegen CRecToken = gets lastFunOperand >>= \case
+  Just f -> pure f
+  Nothing -> throwError (CodegenError "Token can be only placed in recursive functions")
 
 viewApp :: CodegenAST -> (CodegenAST, [CodegenAST])
 viewApp = go []

@@ -19,15 +19,7 @@
 --
 -------------------------------------------------------------------------------
 
-module Lab.Decls ( CodegenAST(..)
-                 , Declaration(..)
-                 , CodegenEnv(..)
-                 , fromAST
-                 , closureConv
-                 , prettyCodegenAST
-                 , liftLam
-                 , smash
-                 , freeVars) where
+module Lab.Decls where
 
 import Control.Monad.Writer
 import Control.Monad.State
@@ -55,6 +47,8 @@ data CodegenAST :: Type where
   CCall :: Int -> CodegenAST
   CLambda :: [LType] -> LType -> CodegenAST -> CodegenAST
   CApp :: CodegenAST -> CodegenAST -> CodegenAST
+  CFix :: CodegenAST -> CodegenAST
+  CRecToken :: CodegenAST
 deriving instance Show CodegenAST
 
 data Declaration = Decl { argsType :: [LType]
@@ -100,6 +94,9 @@ prettyCodegenAST = snd . go 0 initPrec
     snd (go i appLeftPrec e) <+> snd (go i appRightPrec arg))
   go i _ (CPair f s) = (i, sGuillemetsOut $
     snd (go i initPrec f) <> comma <> snd (go i initPrec s))
+  go i prec (CFix e) = (i, maybeParens (prec >= appPrec) $
+    pretty "fix" <+> snd (go i initPrec e))
+  go i _ CRecToken = (i, pretty "rec call")
 
   colors :: [Color]
   colors = cycle [Red, Green, Yellow, Blue, Magenta, Cyan]
@@ -108,29 +105,36 @@ prettyCodegenAST = snd . go 0 initPrec
   colorVar i = annotate (color $ colors !! i)
 
 fromAST :: SList env -> AST env ty -> CodegenAST
-fromAST _   (IntE n) = CIntE n
-fromAST _   (BoolE b) = CBoolE b
-fromAST _   UnitE = CUnitE
-fromAST env (PrimUnaryOp op e) = CPrimUnaryOp op (fromAST env e)
-fromAST env (PrimBinaryOp op e1 e2) = CPrimBinaryOp op (fromAST env e1) (fromAST env e2)
-fromAST env (Cond c e1 e2) = CCond (fromAST env c) (fromAST env e1) (fromAST env e2)
-fromAST _   (Var e) = CVar (elemToIntegral e)
-fromAST env (Pair e1 e2) = CPair (fromAST env e1) (fromAST env e2)
-fromAST _   (Fix _) = error "Fix operator is not implemented yet"
-fromAST env (Lambda sty e) = CLambda [fromSing sty] (fromSing $ returnType (SCons sty env) e) (fromAST (SCons sty env) e)
-fromAST env (App lam arg) = CApp (fromAST env lam) (fromAST env arg)
+fromAST = fromAST' 0
+
+fromAST' :: Int -> SList env -> AST env ty -> CodegenAST
+fromAST' vars env (PrimUnaryOp op e) = CPrimUnaryOp op (fromAST' vars env e)
+fromAST' vars env (PrimBinaryOp op e1 e2) = CPrimBinaryOp op (fromAST' vars env e1) (fromAST' vars env e2)
+fromAST' vars env (Cond c e1 e2) = CCond (fromAST' vars env c) (fromAST' vars env e1) (fromAST' vars env e2)
+fromAST' vars _   (Var e) = if vars == elemToIntegral e then CRecToken else CVar (elemToIntegral e)
+fromAST' vars env (Pair e1 e2) = CPair (fromAST' vars env e1) (fromAST' vars env e2)
+fromAST' vars env (Lambda sty e) = let env' = SCons sty env in
+                                       CLambda [fromSing sty] (fromSing $ returnType env' e) (fromAST' vars env' e)
+fromAST' vars env (App lam arg) = CApp (fromAST' vars env lam) (fromAST' vars env arg)
+fromAST' vars env (Fix (Lambda ret e)) = fromAST' (vars + 1) (SCons ret env) e
+fromAST' _ _ (Fix _) = error "Unsupported"
+fromAST' _ _ (IntE n) = CIntE n
+fromAST' _ _ (BoolE b) = CBoolE b
+fromAST' _ _ UnitE = CUnitE
 
 freeVars :: CodegenAST -> [(LType, Int)]
-freeVars = go 0 []
-  where go :: Int -> [LType] -> CodegenAST -> [(LType, Int)]
-        go i types (CPrimBinaryOp _ e1 e2) = go i types e1 ++ go i types e2
-        go i types (CPrimUnaryOp _ e) = go i types e
-        go i types (CCond c e1 e2) = go i types c ++ go i types e1 ++ go i types e2
-        go i types (CVar v) = [(types !! (v - 1), v) | v >= i]
-        go i types (CPair e1 e2) = go i types e1 ++ go i types e2
-        go i types (CApp lam arg) = go i types lam ++ go i types arg
-        go i types (CLambda argsTy _ e) = go (i + length argsTy) (types ++ argsTy) e
-        go _ _ _ = []
+freeVars = freeVars' 0 []
+
+freeVars' :: Int -> [LType] -> CodegenAST -> [(LType, Int)]
+freeVars' i types (CPrimBinaryOp _ e1 e2) = freeVars' i types e1 ++ freeVars' i types e2
+freeVars' i types (CPrimUnaryOp _ e) = freeVars' i types e
+freeVars' i types (CCond c e1 e2) = freeVars' i types c ++ freeVars' i types e1 ++ freeVars' i types e2
+freeVars' i types (CVar v) = [(types !! v, v) | v >= i]
+freeVars' i types (CPair e1 e2) = freeVars' i types e1 ++ freeVars' i types e2
+freeVars' i types (CApp lam arg) = freeVars' i types lam ++ freeVars' i types arg
+freeVars' i types (CLambda argsTy _ e) = freeVars' (i + length argsTy) (argsTy ++ types) e
+freeVars' i types (CFix e) = freeVars' i types e
+freeVars' _ _ _ = []
 
 closureConv :: CodegenAST -> CodegenAST
 closureConv lam@(CLambda vs ret e) = let e' = closureConv e
@@ -141,6 +145,7 @@ closureConv (CPrimBinaryOp op e1 e2) = CPrimBinaryOp op (closureConv e1) (closur
 closureConv (CCond c e1 e2) = CCond (closureConv c) (closureConv e1) (closureConv e2)
 closureConv (CPair e1 e2) = CPair (closureConv e1) (closureConv e2)
 closureConv (CApp lam arg) = CApp (closureConv lam) (closureConv arg)
+closureConv (CFix e) = CFix (closureConv e)
 closureConv e = e
 
 applyTo :: CodegenAST -> [Int] -> CodegenAST
@@ -158,6 +163,7 @@ liftLam (CPrimBinaryOp op e1 e2) = CPrimBinaryOp op <$> liftLam e1 <*> liftLam e
 liftLam (CCond c e1 e2) = CCond <$> liftLam c <*> liftLam e1 <*> liftLam e2
 liftLam (CPair e1 e2) = CPair <$> liftLam e1 <*> liftLam e2
 liftLam (CApp lam arg) = CApp <$> liftLam lam <*> liftLam arg
+liftLam (CFix lam) = liftLam lam
 liftLam e = pure e
 
 smash :: CodegenAST -> CodegenAST
