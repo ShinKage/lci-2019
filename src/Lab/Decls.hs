@@ -10,7 +10,7 @@
 -- |
 -- Module      : Lab.Decls
 -- Description : Lab language abstract syntax tree with top-level
---               function declarations
+--               function declarations, ready for code generation.
 -- Copyright   : (c) Giuseppe Lomurno, 2019
 -- License     : ...
 -- Maintainer  : Giuseppe Lomurno <g.lomurno@studenti.unipi.it>
@@ -19,91 +19,133 @@
 --
 -------------------------------------------------------------------------------
 
-module Lab.Decls where
+module Lab.Decls ( CodegenAST(..)
+                 , Declaration(..)
+                 , CodegenEnv(..)
+                 , closureConv
+                 , freeVars
+                 , fromAST
+                 , liftLam
+                 , prettyCodegenAST
+                 , smash) where
 
 import Control.Monad.Writer
 import Control.Monad.State
+import qualified Control.Monad.State.Strict as Strict
 import Data.Kind
 import Data.List.Extra
+import Data.Singletons.Prelude
 import Data.Text.Prettyprint.Doc
 import Data.Text.Prettyprint.Doc.Render.Terminal
 import Data.Text.Prettyprint.Doc.Symbols.Unicode
-import Data.Singletons
-import Data.Singletons.Prelude
 
+import Lab.AST
 import Lab.Types
 import Lab.Utils
-import Lab.AST
 
+-- | Stripped down version of the Lab AST, with support for top level
+-- function declarations and call mechanism. This IR is not typed and
+-- is meant to be derived only by translation from the typed AST.
 data CodegenAST :: Type where
+  -- | An integer literal.
   CIntE  :: Integer -> CodegenAST
+  -- | A boolean literal.
   CBoolE :: Bool -> CodegenAST
+  -- | Unit literal.
   CUnitE :: CodegenAST
+  -- | Primitive unary operators.
   CPrimUnaryOp :: UnaryOp arg ret -> CodegenAST -> CodegenAST
+  -- | Primitive binary operators.
   CPrimBinaryOp :: BinaryOp arg1 arg2 ret -> CodegenAST -> CodegenAST -> CodegenAST
+  -- | Conditional expressions.
   CCond :: CodegenAST -> CodegenAST -> CodegenAST -> CodegenAST
+  -- | Variable as De Brujin index of the environment.
   CVar :: Int -> CodegenAST
+  -- | Pair of expressions.
   CPair :: CodegenAST -> CodegenAST -> CodegenAST
+  -- | Reference to a top-level function declaration.
   CCall :: Int -> CodegenAST
+  -- | Lambda abstraction with explicit arguments type.
   CLambda :: [LType] -> LType -> CodegenAST -> CodegenAST
+  -- | Lambda application. It only applies a single argument.
   CApp :: CodegenAST -> CodegenAST -> CodegenAST
+  -- | Fixpoint operator for recursive functions support.
+  -- Correctly lifted expression must not contain this constructor.
   CFix :: CodegenAST -> CodegenAST
+  -- Recursion call token, must be present only in top-level declarations.
   CRecToken :: CodegenAST
+
 deriving instance Show CodegenAST
 
+-- | A top-level function declaration.
 data Declaration = Decl { argsType :: [LType]
                         , retType :: LType
                         , body :: CodegenAST
                         }
   deriving (Show)
 
+-- | An environment for code generation with a list of declarations
+-- and the expression to execute.
 data CodegenEnv = Env { decl :: [Declaration]
                       , expr :: CodegenAST
                       }
   deriving (Show)
 
 prettyCodegenAST :: CodegenAST -> Doc AnsiStyle
-prettyCodegenAST = snd . go 0 initPrec
- where
-  go :: Int -> Rational -> CodegenAST -> (Int, Doc AnsiStyle)
-  go i _ (CIntE  n) = (i, annotate bold (pretty n))
-  go i _ (CBoolE b) = (i, annotate bold (pretty b))
-  go i _ CUnitE     = (i, annotate bold (pretty "unit"))
-  go i prec (CPrimUnaryOp op e1) =
-    (i, maybeParens (prec >= opPrec op) $ pretty op <> snd (go i (opPrecArg op) e1))
-  go i prec (CPrimBinaryOp op e1 e2) =
-    (i, maybeParens (prec >= binOpPrec op) $
-          snd (go i (binOpLeftPrec op) e1)
-          <+> pretty op
-          <+> snd (go i (binOpRightPrec op) e2))
-  go i prec (CCond c e1 e2) =
-    (i, maybeParens (prec >= ifPrec) $ fillSep
-      [ pretty "if"   <+> snd (go i initPrec c)
-      , pretty "then" <+> snd (go i initPrec e1)
-      , pretty "else" <+> snd (go i initPrec e2)
-      ])
-  go i _ (CVar v) = (i, colorVar v $ pretty '#' <> pretty v)
-  go i _ (CCall v) = (i, pretty "call" <+> pretty v)
-  go i prec (CLambda args _ e) = case go i initPrec e of
-    (i_body, doc_body) ->
-      (i_body + 1, maybeParens (prec >= lambdaPrec) $
-        fillSep [ pretty 'λ' <+> pretty args <> pretty '.'
-                , doc_body
-                ])
-  go i prec (CApp e arg) = (i, maybeParens (prec >= appPrec) $
-    snd (go i appLeftPrec e) <+> snd (go i appRightPrec arg))
-  go i _ (CPair f s) = (i, sGuillemetsOut $
-    snd (go i initPrec f) <> comma <> snd (go i initPrec s))
-  go i prec (CFix e) = (i, maybeParens (prec >= appPrec) $
-    pretty "fix" <+> snd (go i initPrec e))
-  go i _ CRecToken = (i, pretty "rec call")
+prettyCodegenAST = flip Strict.evalState (0, initPrec) . go
+  where updatePrec :: Prec -> (Int, Prec) -> (Int, Prec)
+        updatePrec p (i, _) = (i, p)
 
-  colors :: [Color]
-  colors = cycle [Red, Green, Yellow, Blue, Magenta, Cyan]
+        go :: CodegenAST -> Strict.State (Int, Prec) (Doc AnsiStyle)
+        go (CIntE n) = pure $ annotate bold (pretty n)
+        go (CBoolE b) = pure $ annotate bold (pretty b)
+        go CUnitE = pure $ annotate bold (pretty "unit")
+        go (CPrimUnaryOp op e) = do
+          prec <- gets snd
+          e' <- Strict.withState (updatePrec $ opPrecArg op) $ go e
+          pure $ maybeParens (prec >= opPrec op) e'
+        go (CPrimBinaryOp op e1 e2) = do
+          prec <- gets snd
+          e1' <- Strict.withState (updatePrec $ binOpLeftPrec op) $ go e1
+          e2' <- Strict.withState (updatePrec $ binOpRightPrec op) $ go e2
+          pure $ maybeParens (prec >= binOpPrec op) $ fillSep [e1' <+> pretty op, e2']
+        go (CCond c e1 e2) = do
+          prec <- gets snd
+          c' <- Strict.withState (updatePrec initPrec) $ go c
+          e1' <- Strict.withState (updatePrec initPrec) $ go e1
+          e2' <- Strict.withState (updatePrec initPrec) $ go e2
+          pure $ maybeParens (prec >= ifPrec) $
+            fillSep [ pretty "if" <+> c'
+                    , pretty "then" <+> e1'
+                    , pretty "else" <+> e2'
+                    ]
+        go (CVar v) = pure $ colorVar v $ pretty '#' <> pretty v
+        go (CCall v) = pure $ pretty "call" <+> pretty v
+        go (CLambda args _ e) = do
+          prec <- gets snd
+          old <- gets fst
+          e' <- Strict.withState (updatePrec initPrec) $ go e
+          modify $ \(_, p) -> (old + 1, p)
+          pure $ maybeParens (prec >= lambdaPrec) $
+            fillSep [ pretty 'λ' <+> pretty args <> pretty '.'
+                    , e'
+                    ]
+        go (CApp e arg) = do
+          prec <- gets snd
+          e' <- Strict.withState (updatePrec appLeftPrec) $ go e
+          arg' <- Strict.withState (updatePrec appRightPrec) $ go arg
+          pure $ maybeParens (prec >= appPrec) $ e' <+> arg'
+        go (CPair f s) = do
+          f' <- Strict.withState (updatePrec initPrec) $ go f
+          s' <- Strict.withState (updatePrec initPrec) $ go s
+          pure $ sGuillemetsOut $ f' <> comma <> s'
+        go (CFix e) = do
+          prec <- gets snd
+          e' <- Strict.withState (updatePrec initPrec) $ go e
+          pure $ maybeParens (prec >= appPrec) $ pretty "fix" <+> e'
+        go CRecToken = pure $ pretty "rec call"
 
-  colorVar :: Int -> Doc AnsiStyle -> Doc AnsiStyle
-  colorVar i = annotate (color $ colors !! i)
-
+-- | Conversion from a typed AST to a code generation ready IR.
 fromAST :: SList env -> AST env ty -> CodegenAST
 fromAST = fromAST' 0
 
@@ -117,11 +159,12 @@ fromAST' vars env (Lambda sty e) = let env' = SCons sty env in
                                        CLambda [fromSing sty] (fromSing $ returnType env' e) (fromAST' vars env' e)
 fromAST' vars env (App lam arg) = CApp (fromAST' vars env lam) (fromAST' vars env arg)
 fromAST' vars env (Fix (Lambda ret e)) = fromAST' (vars + 1) (SCons ret env) e
-fromAST' _ _ (Fix _) = error "Unsupported"
+fromAST' _ _ (Fix _) = error "Unsupported lambda reference in fix operator"
 fromAST' _ _ (IntE n) = CIntE n
 fromAST' _ _ (BoolE b) = CBoolE b
 fromAST' _ _ UnitE = CUnitE
 
+-- | Returns the list of free variable used in the expression.
 freeVars :: CodegenAST -> [(LType, Int)]
 freeVars = freeVars' 0 []
 
@@ -136,6 +179,7 @@ freeVars' i types (CLambda argsTy _ e) = freeVars' (i + length argsTy) (argsTy +
 freeVars' i types (CFix e) = freeVars' i types e
 freeVars' _ _ _ = []
 
+-- | Applies the closure conversion transformation to the expression.
 closureConv :: CodegenAST -> CodegenAST
 closureConv lam@(CLambda vs ret e) = let e' = closureConv e
                                          vars = freeVars lam in
@@ -151,6 +195,7 @@ closureConv e = e
 applyTo :: CodegenAST -> [Int] -> CodegenAST
 applyTo = foldl (\e a -> CApp e $ CVar a)
 
+-- | Applies the lambda lifting transformation to the expression.
 liftLam :: CodegenAST -> WriterT [Declaration] (State Int) CodegenAST
 liftLam (CLambda vs ret e) = do
   fresh <- get
@@ -166,6 +211,8 @@ liftLam (CApp lam arg) = CApp <$> liftLam lam <*> liftLam arg
 liftLam (CFix lam) = liftLam lam
 liftLam e = pure e
 
+-- | Joins sequences of lambda abstractions in single multi-parameters lambda
+-- abstractions.
 smash :: CodegenAST -> CodegenAST
 smash (CLambda vs _ (CLambda vs' ret' e)) = smash (CLambda (vs ++ vs') ret' e)
 smash (CLambda vs ret e) = CLambda vs ret (smash e)

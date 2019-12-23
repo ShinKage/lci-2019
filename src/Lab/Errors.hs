@@ -6,13 +6,22 @@ import Data.Text.Prettyprint.Doc.Render.Terminal
 
 import Lab.Types
 
-data LabError = ExpectedType (SomeSing LType) (SomeSing LType) String
-              | TypeMismatch (SomeSing LType) (SomeSing LType) String
-              | LambdaRequired (SomeSing LType) String
-              | PairRequired (SomeSing LType) String
-              | UndefinedReference String
-              | ParseError String
-              | CodegenError String
+-- | Lab language errors.
+data LabError
+  -- | Expression required a type but got another.
+  = ExpectedType (SomeSing LType) (SomeSing LType) String
+  -- | Two expression require same type but got two distinct types.
+  | TypeMismatch (SomeSing LType) (SomeSing LType) String
+  -- | Expression is required to represent a lambda abstraction.
+  | LambdaRequired (SomeSing LType) String
+  -- | Expression is required to represent a pair.
+  | PairRequired (SomeSing LType) String
+  -- | Parsing error, name reference is undefined.
+  | UndefinedReference String
+  -- | Generic parsing error.
+  | ParseError String
+  -- | Generic code generation error.
+  | CodegenError String
 
 prettyError :: LabError -> Doc AnsiStyle
 prettyError (ExpectedType (SomeSing t1) (SomeSing t2) msg) =

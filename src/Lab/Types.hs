@@ -1,13 +1,13 @@
 {-# LANGUAGE EmptyCase #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE InstanceSigs #-}
-{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeInType #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 -------------------------------------------------------------------------------
 -- |
@@ -39,11 +39,11 @@ $(singletons [d|
   |])
 
 instance Pretty LType where
-  pretty LInt = pretty "ℤ"
+  pretty LInt  = pretty "ℤ"
   pretty LBool = pretty "𝔹"
   pretty LUnit = pretty "⊤"
   pretty LVoid = pretty "⊥"
-  pretty (LProduct a b) = pretty a <+> pretty "⊗" <+> pretty b
+  pretty (LProduct a b)   = parens (pretty a <+> pretty "⊗" <+> pretty b)
   pretty (LArrow arg ret) = parens (pretty arg <+> pretty "→" <+> pretty ret)
 
 instance Pretty (SLType ty) where
@@ -58,6 +58,7 @@ data UnaryOp :: LType -> LType -> Type where
 
 deriving instance Show (UnaryOp arg ret)
 
+-- | Computes the return type of a primitive unary operation.
 unaryReturnType :: SLType arg -> UnaryOp arg ret -> SLType ret
 unaryReturnType _ PrimNeg = sing
 unaryReturnType _ PrimNot = sing
@@ -88,6 +89,7 @@ data BinaryOp :: LType -> LType -> LType -> Type where
 
 deriving instance Show (BinaryOp arg1 arg2 ret)
 
+-- | Computes the return type of a primitive binary operation.
 binaryReturnType :: SLType arg1 -> SLType arg2 -> BinaryOp arg1 arg2 ret -> SLType ret
 binaryReturnType _ _ PrimAdd = sing
 binaryReturnType _ _ PrimSub = sing

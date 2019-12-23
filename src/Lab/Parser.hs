@@ -16,14 +16,15 @@ module Lab.Parser (parseLanguage) where
 
 import           Control.Monad.Combinators.Expr
 import           Data.Functor (($>))
+import           Data.Singletons
 import           Data.Text (Text, pack)
 import           Data.Void
-import           Data.Singletons
 import           Text.Megaparsec
 import           Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
-import           Lab.Untyped
+
 import           Lab.Types
+import           Lab.Untyped
 
 -- TODO: Custom error messages
 type Parser = Parsec Void Text

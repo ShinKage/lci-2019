@@ -1,4 +1,3 @@
-{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE EmptyCase #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -7,6 +6,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeInType #-}
+{-# LANGUAGE TypeOperators #-}
 
 -------------------------------------------------------------------------------
 -- |
@@ -22,11 +22,11 @@
 
 module Lab.Eval (Value(..), Step(..), eval, step, prettyStep) where
 
-import Data.Text.Prettyprint.Doc
-import Data.Text.Prettyprint.Doc.Render.Terminal
 import Data.Kind
 import Data.List.Extra
 import Data.Singletons.Prelude.List hiding (Elem, Length)
+import Data.Text.Prettyprint.Doc
+import Data.Text.Prettyprint.Doc.Render.Terminal
 
 import Lab.AST
 import Lab.Types
@@ -48,9 +48,9 @@ data Value :: LType -> Type where
 
 -- | Evaluation function for Lab.
 eval :: AST '[] a -> Value a
-eval e@(IntE  n)    = Value e n
-eval e@(BoolE b)    = Value e b
-eval UnitE          = Value UnitE ()
+eval e@(IntE  n) = Value e n
+eval e@(BoolE b) = Value e b
+eval UnitE       = Value UnitE ()
 eval (Cond c e1 e2) = if val (eval c) then eval e1 else eval e2
 eval (Var prf) = \case {} $ prf -- Empty case because an Elem instance is impossible with an empty context
 eval e@(Lambda _ body) = Value e (`subst` body)
@@ -59,8 +59,7 @@ eval (Fix e) = eval $ unfix e (val $ eval e)
 eval (Pair f s) = let f' = eval f
                       s' = eval s in
                       Value (Pair (expr f') (expr s')) (val f', val s')
-eval (PrimUnaryOp PrimNeg e) =
-  let v = negate $ val $ eval e in Value (IntE v) v
+eval (PrimUnaryOp PrimNeg e) = let v = negate $ val $ eval e in Value (IntE v) v
 eval (PrimUnaryOp PrimNot e) = let v = not $ val $ eval e in Value (BoolE v) v
 eval (PrimUnaryOp PrimFst e) = case eval e of
   Value (Pair e' _) _ -> eval e'
@@ -201,7 +200,7 @@ prettyStep :: Step a -> Doc AnsiStyle
 prettyStep (StepAST ast) = prettyAST ast
 prettyStep (StepValue v) = prettyAST (expr v)
 
--- | Evaluation function for Lab.
+-- | Performs a single step of beta-reduction for a Lab expression.
 step :: AST '[] a -> Step a
 step e@(IntE  n)    = StepValue (Value e n)
 step e@(BoolE b)    = StepValue (Value e b)
@@ -242,52 +241,52 @@ step (PrimBinaryOp PrimAdd e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimAdd e1' e2)
   StepValue e1' -> case step e2 of
     StepAST e2' -> StepAST (PrimBinaryOp PrimAdd (expr e1') e2')
-    StepValue e2' -> let v = (val e1') + (val e2') in StepValue $ Value (IntE v) v
+    StepValue e2' -> let v = val e1' + val e2' in StepValue $ Value (IntE v) v
 step (PrimBinaryOp PrimSub e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimSub e1' e2)
   StepValue e1' -> case step e2 of
     StepAST e2' -> StepAST (PrimBinaryOp PrimSub (expr e1') e2')
-    StepValue e2' -> let v = (val e1') - (val e2') in StepValue $ Value (IntE v) v
+    StepValue e2' -> let v = val e1' - val e2' in StepValue $ Value (IntE v) v
 step (PrimBinaryOp PrimMul e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimMul e1' e2)
   StepValue e1' -> case step e2 of
     StepAST e2' -> StepAST (PrimBinaryOp PrimMul (expr e1') e2')
-    StepValue e2' -> let v = (val e1') * (val e2') in StepValue $ Value (IntE v) v
+    StepValue e2' -> let v = val e1' * val e2' in StepValue $ Value (IntE v) v
 step (PrimBinaryOp PrimDiv e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimDiv e1' e2)
   StepValue e1' -> case step e2 of
     StepAST e2' -> StepAST (PrimBinaryOp PrimDiv (expr e1') e2')
-    StepValue e2' -> let v = (val e1') `div` (val e2') in StepValue $ Value (IntE v) v
+    StepValue e2' -> let v = val e1' `div` val e2' in StepValue $ Value (IntE v) v
 step (PrimBinaryOp PrimAnd e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimAnd e1' e2)
   StepValue e1' -> case step e2 of
     StepAST e2' -> StepAST (PrimBinaryOp PrimAnd (expr e1') e2')
-    StepValue e2' -> let v = (val e1') && (val e2') in StepValue $ Value (BoolE v) v
+    StepValue e2' -> let v = val e1' && val e2' in StepValue $ Value (BoolE v) v
 step (PrimBinaryOp PrimOr e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimOr e1' e2)
   StepValue e1' -> case step e2 of
     StepAST e2' -> StepAST (PrimBinaryOp PrimOr (expr e1') e2')
-    StepValue e2' -> let v = (val e1') || (val e2') in StepValue $ Value (BoolE v) v
+    StepValue e2' -> let v = val e1' || val e2' in StepValue $ Value (BoolE v) v
 step (PrimBinaryOp PrimLT e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimLT e1' e2)
   StepValue e1' -> case step e2 of
     StepAST e2' -> StepAST (PrimBinaryOp PrimLT (expr e1') e2')
-    StepValue e2' -> let v = (val e1') < (val e2') in StepValue $ Value (BoolE v) v
+    StepValue e2' -> let v = val e1' < val e2' in StepValue $ Value (BoolE v) v
 step (PrimBinaryOp PrimGT e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimGT e1' e2)
   StepValue e1' -> case step e2 of
     StepAST e2' -> StepAST (PrimBinaryOp PrimGT (expr e1') e2')
-    StepValue e2' -> let v = (val e1') > (val e2') in StepValue $ Value (BoolE v) v
+    StepValue e2' -> let v = val e1' > val e2' in StepValue $ Value (BoolE v) v
 step (PrimBinaryOp PrimLE e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimLE e1' e2)
   StepValue e1' -> case step e2 of
     StepAST e2' -> StepAST (PrimBinaryOp PrimLE (expr e1') e2')
-    StepValue e2' -> let v = (val e1') <= (val e2') in StepValue $ Value (BoolE v) v
+    StepValue e2' -> let v = val e1' <= val e2' in StepValue $ Value (BoolE v) v
 step (PrimBinaryOp PrimGE e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimGE e1' e2)
   StepValue e1' -> case step e2 of
     StepAST e2' -> StepAST (PrimBinaryOp PrimGE (expr e1') e2')
-    StepValue e2' -> let v = (val e1') >= (val e2') in StepValue $ Value (BoolE v) v
+    StepValue e2' -> let v = val e1' >= val e2' in StepValue $ Value (BoolE v) v
 step (PrimBinaryOp PrimEq e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimEq e1' e2)
   StepValue e1' -> case step e2 of

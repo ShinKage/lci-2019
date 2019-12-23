@@ -17,36 +17,47 @@
 --
 -------------------------------------------------------------------------------
 
-module Lab.Untyped where
+module Lab.Untyped (Name, Untyped(..), typecheck) where
 
 import Control.Monad.Except
-import Data.Text
 import Data.Kind
-import Data.List.Extra
 import Data.List (elemIndex)
-import Data.Singletons.Prelude hiding (Elem)
+import Data.List.Extra
 import Data.Singletons.Decide
+import Data.Singletons.Prelude hiding (Elem)
 import Data.Singletons.Sigma
+import Data.Text
 
 import Lab.AST
-import Lab.Types
 import Lab.Errors (LabError)
 import qualified Lab.Errors as Err
+import Lab.Types
 
 type Name = Text
 
 -- | Untyped Abstract Syntax Tree used for parsing.
 data Untyped :: Type where
+  -- | An integer literal.
   UIntE :: Integer -> Untyped
+  -- | A boolean literal.
   UBoolE :: Bool -> Untyped
+  -- | Unit literal.
   UUnitE :: Untyped
+  -- | Primitive unary operators.
   UPrimUnaryOp :: UnaryOp arg ret -> Untyped -> Untyped
+  -- | Primitive binary operators.
   UPrimBinaryOp :: BinaryOp arg1 arg2 ret -> Untyped -> Untyped -> Untyped
+  -- | Conditional expressions.
   UCond :: Untyped -> Untyped -> Untyped -> Untyped
+  -- | Lambda abstraction with explicit argument type.
   ULambda :: Name -> SomeSing LType -> Untyped -> Untyped
+  -- | Named variable.
   UVar :: Name -> Untyped
+  -- | Lambda application.
   UApp :: Untyped -> Untyped -> Untyped
+  -- | Pair of expressions.
   UPair :: Untyped -> Untyped -> Untyped
+  -- | Fixpoint operator for recursive functions support.
   UFix :: Untyped -> Untyped
 
 deriving instance Show Untyped
@@ -54,7 +65,7 @@ deriving instance Show Untyped
 -- | Typechecks an untyped AST. Produces a well-formed typed AST in CPS style.
 -- The continuation is required to avoid complex type definition and
 -- existential types to return the dependently typed AST.
-typecheck :: MonadError LabError m -- TODO: Use custom error type
+typecheck :: MonadError LabError m
           => Untyped
           -> (forall ty. Sing ty -> AST '[] ty -> m r)
           -> m r
@@ -64,17 +75,18 @@ typecheck = go SNil []
        => Sing env
        -> [Name]
        -> Untyped
-       -> (forall ty. Sing ty -> AST env ty -> m r) -> m r
+       -> (forall ty. Sing ty -> AST env ty -> m r)
+       -> m r
     go _ _ (UIntE n) k = k sing (IntE n)
     go _ _ (UBoolE b) k = k sing (BoolE b)
     go _ _ UUnitE k = k sing UnitE
 
     go env names (UCond c e1 e2) k =
-      go env names c $ \tyc' c' -> case tyc' %~ SLBool of
+      go env names c $ \tyc' c' -> case tyc' %~ SLBool of -- Check must be a boolean
         Disproved _ -> throwError $ Err.expectedType SLBool tyc' "Cond requires a boolean guard"
         Proved Refl ->
           go env names e1 $ \ty1' e1' ->
-          go env names e2 $ \ty2' e2' -> case ty1' %~ ty2' of
+          go env names e2 $ \ty2' e2' -> case ty1' %~ ty2' of -- Both branches must be of the same type
             Proved Refl -> k ty2' (Cond c' e1' e2')
             Disproved _ -> throwError $ Err.typeMismatch ty1' ty2' "Cond requires two branches of the same type"
 
@@ -89,14 +101,14 @@ typecheck = go SNil []
     go env names (UApp lam arg) k =
       go env names lam $ \lamTy body ->
       go env names arg $ \argTy arg' -> case lamTy of
-        SLArrow argTy' retTy -> case argTy' %~ argTy of
+        SLArrow argTy' retTy -> case argTy' %~ argTy of -- Argument type must match the required type
           Proved Refl -> k retTy (App body arg')
           Disproved _ -> throwError $ Err.expectedType argTy argTy' "Application requires an argument of the declared type"
         _ -> throwError $ Err.lambdaRequired lamTy "Application requires a lambda abstraction"
 
     go env names (UFix lam) k =
       go env names lam $ \lamTy body -> case lamTy of
-        SLArrow argTy retTy -> case argTy %~ retTy of
+        SLArrow argTy retTy -> case argTy %~ retTy of -- Fixpoint requires a lambda with matching argument and return type
           Proved Refl -> k retTy (Fix body)
           Disproved _ -> throwError $ Err.expectedType retTy argTy "Fixpoint operator requires a lambda with same argument and return type"
         _ -> throwError $ Err.lambdaRequired lamTy "Fixpoint operator requires a lambda abstraction"

@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -28,16 +29,18 @@ import Data.Singletons.Sigma
 data Elem :: [a] -> a -> Type where
   Here  :: Elem (x : xs) x
   There :: Elem xs x -> Elem (y : xs) x
+
 deriving instance Show (Elem xs x)
 
+-- | Returns the element at the index represented by the 'Elem' proof.
 index :: Elem xs x -> SList xs -> Sing x
-index Here (SCons x _) = x
-index (There prf) (SCons _ xs) = index prf xs
+index Here      (SCons x _)  = x
+index (There e) (SCons _ xs) = index e xs
 
 -- | Recovers the position inside the list from the proof.
 elemToIntegral :: Integral n => Elem xs x -> n
-elemToIntegral Here        = 0
-elemToIntegral (There prf) = 1 + elemToIntegral prf
+elemToIntegral Here      = 0
+elemToIntegral (There e) = 1 + elemToIntegral e
 
 -- | Given a list, in singleton form required for dependent constructs,
 -- checks whether the provided index is a valid index and builds a proof
@@ -47,13 +50,15 @@ maybeElem SNil _ = Nothing
 maybeElem (SCons x xs) idx
   | idx < 0   = Nothing
   | idx == 0  = Just (x :&: Here)
-  | otherwise = maybeElem xs (idx - 1)
-                  >>= \(y :&: prf) -> Just (y :&: There prf)
+  | otherwise = maybeElem xs (idx - 1) >>= \case
+                  y :&: prf -> Just $ y :&: There prf
 
 -- | Runtime (dependent) representation of a list length.
 data Length :: [a] -> Type where
   LZ :: Length '[]
   LS :: Length xs -> Length (x : xs)
+
+deriving instance Show (Length xs)
 
 -- | Given a proof that an element x is inside the list xs, it builds a proof
 -- that x is an element of the list with another list prefixed to xs.

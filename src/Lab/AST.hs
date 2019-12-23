@@ -1,7 +1,6 @@
+{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE NoStarIsType #-}
-{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeInType #-}
 {-# LANGUAGE TypeOperators #-}
@@ -20,18 +19,18 @@
 
 module Lab.AST (AST(..), prettyAST, returnType) where
 
+import Control.Monad.State.Strict
 import Data.Kind
 import Data.List.Extra
+import Data.Singletons.Prelude hiding (Elem)
 import Data.Text.Prettyprint.Doc
 import Data.Text.Prettyprint.Doc.Render.Terminal
 import Data.Text.Prettyprint.Doc.Symbols.Unicode
-import Data.Singletons
-import Data.Singletons.Prelude hiding (Elem)
 
 import Lab.Types
 import Lab.Utils
 
--- | The lab language Abstract Syntax Tree.
+-- | The Lab language Abstract Syntax Tree.
 -- The data type is indexed by the list of binded types and the return type
 -- of the expression. Dependent functionalities are used to constructs only
 -- well-formed expressions, in particular regarding to typing rules.
@@ -48,8 +47,7 @@ data AST :: [LType] -> LType -> Type where
   PrimBinaryOp :: BinaryOp arg1 arg2 ret -> AST env arg1 -> AST env arg2 -> AST env ret
   -- | Conditional expressions, all branches must have the same type.
   Cond :: AST env LBool -> AST env ret -> AST env ret -> AST env ret
-  -- | Lambda abstraction with explicit type. In some context the type singleton
-  -- can be inferred thanks to the 'SingI' class.
+  -- | Lambda abstraction with explicit argument type.
   Lambda :: SLType arg -> AST (arg : env) ret -> AST env (LArrow arg ret)
   -- | Variable as De Brujin index of the indexed binding list.
   Var :: Elem env ty -> AST env ty
@@ -57,10 +55,12 @@ data AST :: [LType] -> LType -> Type where
   App :: AST env (LArrow arg ret) -> AST env arg -> AST env ret
   -- | Pair of expressions.
   Pair :: AST env a -> AST env b -> AST env (LProduct a b)
-  -- | Fixpoint operator for recursive functions
+  -- | Fixpoint operator for recursive functions support.
   Fix :: AST env (LArrow a a) -> AST env a
+
 deriving instance Show (AST env ty)
 
+-- | Computes the return type of an expression within an environment.
 returnType :: SList env -> AST env ty -> SLType ty
 returnType _ (IntE _) = sing
 returnType _ (BoolE _) = sing
@@ -74,48 +74,56 @@ returnType env (App lam _) = case returnType env lam of SLArrow _ ty -> ty
 returnType env (Fix e) = case returnType env e of SLArrow _ ty -> ty
 returnType env (Pair e1 e2) = SLProduct (returnType env e1) (returnType env e2)
 
--- | Pretty printing for the AST.
 prettyAST :: AST env ty -> Doc AnsiStyle
-prettyAST = snd . go 0 initPrec
- where
-  go :: Int -> Rational -> AST env ty -> (Int, Doc AnsiStyle)
-  go i _ (IntE  n) = (i, annotate bold (pretty n))
-  go i _ (BoolE b) = (i, annotate bold (pretty b))
-  go i _ UnitE     = (i, annotate bold (pretty "unit"))
-  go i prec (PrimUnaryOp op e1) =
-    (i, maybeParens (prec >= opPrec op) $ pretty op <> snd (go i (opPrecArg op) e1))
-  go i prec (PrimBinaryOp op e1 e2) =
-    (i, maybeParens (prec >= binOpPrec op) $
-          snd (go i (binOpLeftPrec op) e1)
-          <+> pretty op
-          <+> snd (go i (binOpRightPrec op) e2))
-  go i prec (Cond c e1 e2) =
-    (i, maybeParens (prec >= ifPrec) $ fillSep
-      [ pretty "if"   <+> snd (go i initPrec c)
-      , pretty "then" <+> snd (go i initPrec e1)
-      , pretty "else" <+> snd (go i initPrec e2)
-      ])
-  go i _ (Var v) = let v' = elemToIntegral v :: Int in
-                       (i, colorVar v' $ pretty '#' <> pretty v')
-  go i prec (Lambda ty body) = case go i initPrec body of
-    (i_body, doc_body) ->
-      (i_body + 1, maybeParens (prec >= lambdaPrec) $
-        fillSep [ pretty 'λ' <> colorVar i_body (pretty '#' <> pretty i_body) <+> pretty ':'
-                             <+> pretty ty <> pretty '.'
-                , doc_body
-                ])
-  go i prec (App body arg) = (i, maybeParens (prec >= appPrec) $
-    snd (go i appLeftPrec body) <+> snd (go i appRightPrec arg))
-  go i _ (Pair f s) = (i, sGuillemetsOut $
-    snd (go i initPrec f) <> comma <> snd (go i initPrec s))
-  go i prec (Fix body) = (i, maybeParens (prec >= appPrec) $
-    pretty "fix" <+> snd (go i initPrec body))
+prettyAST = flip evalState (0, initPrec) . go
+  where updatePrec :: Prec -> (Int, Prec) -> (Int, Prec)
+        updatePrec p (i, _) = (i, p)
 
-  colors :: [Color]
-  colors = cycle [Red, Green, Yellow, Blue, Magenta, Cyan]
-
-  colorVar :: Int -> Doc AnsiStyle -> Doc AnsiStyle
-  colorVar i = annotate (color $ colors !! i)
-
--- WHY IT DOES NOT WORK?
--- let f : int -> int -> int = \x:int,y:int.let g:int->int->int=(\a:int,b:int.x+y+a)
+        go :: AST env ty -> State (Int, Prec) (Doc AnsiStyle)
+        go (IntE n) = pure $ annotate bold (pretty n)
+        go (BoolE b) = pure $ annotate bold (pretty b)
+        go UnitE = pure $ annotate bold (pretty "unit")
+        go (PrimUnaryOp op e) = do
+          prec <- gets snd
+          e' <- withState (updatePrec $ opPrecArg op) $ go e
+          pure $ maybeParens (prec >= opPrec op) e'
+        go (PrimBinaryOp op e1 e2) = do
+          prec <- gets snd
+          e1' <- withState (updatePrec $ binOpLeftPrec op) $ go e1
+          e2' <- withState (updatePrec $ binOpRightPrec op) $ go e2
+          pure $ maybeParens (prec >= binOpPrec op) $ fillSep [e1' <+> pretty op, e2']
+        go (Cond c e1 e2) = do
+          prec <- gets snd
+          c' <- withState (updatePrec initPrec) $ go c
+          e1' <- withState (updatePrec initPrec) $ go e1
+          e2' <- withState (updatePrec initPrec) $ go e2
+          pure $ maybeParens (prec >= ifPrec) $
+            fillSep [ pretty "if" <+> c'
+                    , pretty "then" <+> e1'
+                    , pretty "else" <+> e2'
+                    ]
+        go (Var (elemToIntegral -> v)) = pure $ colorVar v $ pretty '#' <> pretty v
+        go (Lambda ty body) = do
+          prec <- gets snd
+          old <- gets fst
+          body' <- withState (updatePrec initPrec) $ go body
+          i <- gets fst
+          modify $ \(_, p) -> (old + 1, p)
+          pure $ maybeParens (prec >= lambdaPrec) $
+            fillSep [ pretty 'λ' <> colorVar i (pretty '#' <> pretty i) <+> pretty ':'
+                                 <+> pretty ty <> pretty '.'
+                    , body'
+                    ]
+        go (App body arg) = do
+          prec <- gets snd
+          body' <- withState (updatePrec appLeftPrec) $ go body
+          arg' <- withState (updatePrec appRightPrec) $ go arg
+          pure $ maybeParens (prec >= appPrec) $ body' <+> arg'
+        go (Pair f s) = do
+          f' <- withState (updatePrec initPrec) $ go f
+          s' <- withState (updatePrec initPrec) $ go s
+          pure $ sGuillemetsOut $ f' <> comma <> s'
+        go (Fix body) = do
+          prec <- gets snd
+          body' <- withState (updatePrec initPrec) $ go body
+          pure $ maybeParens (prec >= appPrec) $ pretty "fix" <+> body'
