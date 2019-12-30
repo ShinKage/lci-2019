@@ -41,10 +41,7 @@ import LLVM.Analysis
 import LLVM.Target
 import qualified LLVM.ExecutionEngine as EE
 import Control.Monad.Except
-import Control.Monad.Writer
-import Control.Monad.State
 import System.Console.Haskeline
-import Data.Singletons.Prelude hiding (Elem)
 
 main :: IO ()
 main = runInputT defaultSettings $
@@ -82,8 +79,7 @@ printAST sty ast =
 
 genLLVM :: (MonadError LabError m, MonadFix m, MonadIO m) => SLType ty -> AST '[] ty -> m ()
 genLLVM ty ast = do
-  let (code, ds) = flip evalState 0 . runWriterT . liftLam . closureConv . smash $ fromAST SNil ast
-  m <- wrapper ty $ Env (Prelude.reverse ds) code
+  m <- wrapper ty $ buildEnv ast
   liftIO . TL.putStrLn . PP.ppllvm $ m
 
 evalAST :: MonadIO m => AST '[] ty -> m ()
@@ -101,8 +97,7 @@ jit c = EE.withMCJIT c (Just 0) Nothing Nothing Nothing
 
 runJit :: (MonadError LabError m, MonadFix m, MonadIO m) => SLType ty -> AST '[] ty -> m ()
 runJit ty ast = do
-  let (code, ds) = flip evalState 0 . runWriterT . liftLam . closureConv . smash $ fromAST SNil ast
-  m <- wrapper ty $ Env (Prelude.reverse ds) code
+  m <- wrapper ty $ buildEnv ast
   liftIO $ withContext $ \context ->
     withModuleFromAST context m $ \m' ->
     withPassManager defaultPassSetSpec $ \_ -> do
@@ -132,8 +127,7 @@ ffiRet _ _ = error "Not a value"
 
 genASM :: (MonadError LabError m, MonadFix m, MonadIO m) => SLType ty -> AST '[] ty -> m ()
 genASM ty ast = do
-  let (code, ds) = flip evalState 0 . runWriterT . liftLam . closureConv . smash $ fromAST SNil ast
-  m <- wrapper ty $ Env (Prelude.reverse ds) code
+  m <- wrapper ty $ buildEnv ast
   liftIO $ withContext $ \context ->
     withModuleFromAST context m $ \m' ->
     withPassManager defaultPassSetSpec $ \_ -> do

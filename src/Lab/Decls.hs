@@ -23,11 +23,13 @@ module Lab.Decls ( CodegenAST(..)
                  , Declaration(..)
                  , CodegenEnv(..)
                  , closureConv
+                 , buildEnv
                  , freeVars
                  , fromAST
                  , liftLam
                  , prettyCodegenAST
-                 , smash) where
+                 , smash
+                 , unfix) where
 
 import Control.Monad.Writer
 import Control.Monad.State
@@ -153,13 +155,15 @@ fromAST' :: Int -> SList env -> AST env ty -> CodegenAST
 fromAST' vars env (PrimUnaryOp op e) = CPrimUnaryOp op (fromAST' vars env e)
 fromAST' vars env (PrimBinaryOp op e1 e2) = CPrimBinaryOp op (fromAST' vars env e1) (fromAST' vars env e2)
 fromAST' vars env (Cond c e1 e2) = CCond (fromAST' vars env c) (fromAST' vars env e1) (fromAST' vars env e2)
-fromAST' vars _   (Var e) = if vars == elemToIntegral e then CRecToken else CVar (elemToIntegral e)
+-- fromAST' vars _   (Var e) = if vars == elemToIntegral e then CRecToken else CVar (elemToIntegral e)
+fromAST' _ _ (Var e) = CVar (elemToIntegral e)
 fromAST' vars env (Pair e1 e2) = CPair (fromAST' vars env e1) (fromAST' vars env e2)
 fromAST' vars env (Lambda sty e) = let env' = SCons sty env in
                                        CLambda [fromSing sty] (fromSing $ returnType env' e) (fromAST' vars env' e)
 fromAST' vars env (App lam arg) = CApp (fromAST' vars env lam) (fromAST' vars env arg)
-fromAST' vars env (Fix (Lambda ret e)) = fromAST' (vars + 1) (SCons ret env) e
-fromAST' _ _ (Fix _) = error "Unsupported lambda reference in fix operator"
+-- fromAST' vars env (Fix (Lambda ret e)) = fromAST' (vars + 1) (SCons ret env) e
+-- fromAST' _ _ (Fix _) = error "Unsupported lambda reference in fix operator"
+fromAST' vars env (Fix e) = CFix (fromAST' vars env e)
 fromAST' _ _ (IntE n) = CIntE n
 fromAST' _ _ (BoolE b) = CBoolE b
 fromAST' _ _ UnitE = CUnitE
@@ -221,4 +225,26 @@ smash (CPrimUnaryOp op e) = CPrimUnaryOp op (smash e)
 smash (CCond c e1 e2) = CCond (smash c) (smash e1) (smash e2)
 smash (CPair e1 e2) = CPair (smash e1) (smash e2)
 smash (CApp lam arg) = CApp (smash lam) (smash arg)
+smash (CFix (CLambda vs ret e)) = CFix (CLambda vs ret (smash e))
 smash e = e
+
+-- | Removes explicit fix operator with recursive call tokens ready for codegen.
+unfix :: CodegenAST -> CodegenAST
+unfix = unfix' 0
+
+unfix' :: Int -> CodegenAST -> CodegenAST
+unfix' vars (CPrimUnaryOp op e) = CPrimUnaryOp op (unfix' vars e)
+unfix' vars (CPrimBinaryOp op e1 e2) = CPrimBinaryOp op (unfix' vars e1) (unfix' vars e2)
+unfix' vars (CCond c e1 e2) = CCond (unfix' vars c) (unfix' vars e1) (unfix' vars e2)
+unfix' vars (CVar e) = if vars == e then CRecToken else CVar e
+unfix' vars (CPair e1 e2) = CPair (unfix' vars e1) (unfix' vars e2)
+unfix' vars (CLambda sty ret e) = CLambda sty ret (unfix' (vars + length sty) e)
+unfix' vars (CApp lam arg) = CApp (unfix' vars lam) (unfix' vars arg)
+unfix' vars (CFix (CLambda _ _ e)) = unfix' vars e
+unfix' _ (CFix _) = error "Unsupported lambda reference in fix operator"
+unfix' _ e = e
+
+buildEnv :: AST '[] ty -> CodegenEnv
+buildEnv ast = let (code, ds) = flip evalState 0 . runWriterT . liftLam . closureConv . unfix . smash $ fromAST SNil ast in
+                   Env (reverse ds) code
+
