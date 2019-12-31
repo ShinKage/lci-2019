@@ -35,6 +35,8 @@ dependencies:
   - libffi
   - haskeline
   - storable-tuple
+  - unordered-containers
+  - hashable
 
 library:
   source-dirs: src

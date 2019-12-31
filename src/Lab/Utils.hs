@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE ViewPatterns #-}
 
 -------------------------------------------------------------------------------
@@ -68,3 +69,8 @@ colorVar :: Int -> Doc AnsiStyle -> Doc AnsiStyle
 colorVar i = annotate (color $ colors !! i)
   where colors :: [Color]
         colors = cycle [Red, Green, Yellow, Blue, Magenta, Cyan]
+
+allPairs :: [a] -> [(a, a)]
+allPairs [] = []
+allPairs [_] = []
+allPairs (x : xs) = map (x,) xs ++ allPairs xs

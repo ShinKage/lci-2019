@@ -63,6 +63,7 @@ repl = prompt "> " >>= \case
           Just "eval"    -> evalAST ast >> loop uast sty ast
           Just "step"    -> stepAST ast >> loop uast sty ast
           Just "pretty"  -> renderPretty (prettyAST ast) >> loop uast sty ast
+          Just "codegen" -> genIR sty ast >> loop uast sty ast
           Just "llvm"    -> genLLVM sty ast >> loop uast sty ast
           Just "jit"     -> runJit sty ast >> loop uast sty ast
           Just "compile" -> genASM sty ast >> loop uast sty ast
@@ -76,6 +77,12 @@ parse = either (throwError . ParseError . P.errorBundlePretty) pure . P.parse (p
 printAST :: MonadIO m => Sing ty -> AST '[] ty -> m ()
 printAST sty ast =
   renderPretty $ PP.pretty (show ast) <+> PP.pretty ("::" :: String) <+> PP.pretty sty
+
+genIR :: (MonadError LabError m, MonadFix m, MonadIO m) => SLType ty -> AST '[] ty -> m ()
+genIR _ ast = do
+  let env = buildEnv ast
+  renderPretty . PP.fillSep . fmap (prettyCodegenAST . body) . decl $ env
+  renderPretty . prettyCodegenAST . Lab.Decls.expr $ env
 
 genLLVM :: (MonadError LabError m, MonadFix m, MonadIO m) => SLType ty -> AST '[] ty -> m ()
 genLLVM ty ast = do

@@ -44,13 +44,14 @@ import Lab.Errors
 
 data EnvState = EnvState { decls :: [Operand]
                          , args :: [Operand]
+                         , lets :: [Operand]
                          , lastFun :: Int
                          , lastFunOperand :: Maybe Operand
                          , lastFunRet :: AST.Type
                          }
 
 emptyEnvState :: EnvState
-emptyEnvState = EnvState [] [] 0 Nothing LLVM.void
+emptyEnvState = EnvState [] [] [] 0 Nothing LLVM.void
 
 -- | Wraps the generated code in a single function.
 wrapper :: (MonadFix m, MonadError LabError m) => SLType ty -> CodegenEnv -> m Module
@@ -81,10 +82,10 @@ topLevelFunctions decls' = forM decls' $ \dec -> mdo
     let retty = labToLLVM $ retType dec
     name <- getFunName
     f <- function name argTypes retty $ \args' -> do
-      modify $ \env -> env { args = reverse args', lastFunOperand = Just f, lastFunRet = retty }
+      modify $ \env -> env { args = reverse args', lastFunOperand = Just f, lastFunRet = retty, lets = [] }
       _ <- block `named` "entry"
       body' <- codegen (body dec)
-      modify $ \env -> env { args = [], lastFunOperand = Nothing, lastFunRet = LLVM.void }
+      modify $ \env -> env { args = [], lastFunOperand = Nothing, lastFunRet = LLVM.void, lets = [] }
       ret body'
     pure f
 
@@ -138,6 +139,16 @@ codegen (CCall i) = do
 codegen CRecToken = gets lastFunOperand >>= \case
   Just f -> pure f
   Nothing -> throwError (CodegenError "Token can be only placed in recursive functions")
+codegen (CLet e1 e2) = do
+  l <- codegen e1
+  old <- gets lets
+  modify $ \env -> env { lets = old ++ [l] }
+  codegen e2
+codegen (CLetRef i) = do
+  lets' <- gets lets
+  case index' i lets' of
+    Just arg -> pure arg
+    Nothing  -> throwError $ CodegenError "Let index out of range"
 
 viewApp :: CodegenAST -> (CodegenAST, [CodegenAST])
 viewApp = go []

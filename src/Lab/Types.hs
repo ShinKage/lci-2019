@@ -24,6 +24,7 @@
 module Lab.Types where
 
 import Data.Kind
+import Data.Hashable
 import Data.Singletons.TH
 import Data.Text.Prettyprint.Doc
 
@@ -49,6 +50,21 @@ instance Pretty LType where
 instance Pretty (SLType ty) where
   pretty = pretty . fromSing
 
+instance Hashable LType where
+  hashWithSalt s LInt = s `hashWithSalt` (0 :: Int)
+  hashWithSalt s LBool = s `hashWithSalt` (1 :: Int)
+  hashWithSalt s LUnit = s `hashWithSalt` (2 :: Int)
+  hashWithSalt s LVoid = s `hashWithSalt` (3 :: Int)
+  hashWithSalt s (LProduct a b) = s `hashWithSalt` (4 :: Int)
+                                    `hashWithSalt` a
+                                    `hashWithSalt` b
+  hashWithSalt s (LArrow a b) = s `hashWithSalt` (5 :: Int)
+                                  `hashWithSalt` a
+                                  `hashWithSalt` b
+
+instance Hashable (SLType ty) where
+  hashWithSalt s ty = hashWithSalt s (fromSing ty)
+
 -- | Primitive unary operations with argument and return type.
 data UnaryOp :: LType -> LType -> Type where
   PrimNeg :: UnaryOp LInt LInt
@@ -57,6 +73,19 @@ data UnaryOp :: LType -> LType -> Type where
   PrimSnd :: UnaryOp (LProduct a b) b
 
 deriving instance Show (UnaryOp arg ret)
+
+eqUnary :: UnaryOp a b -> UnaryOp c d -> Bool
+eqUnary PrimNeg PrimNeg = True
+eqUnary PrimNot PrimNot = True
+eqUnary PrimFst PrimFst = True
+eqUnary PrimSnd PrimSnd = True
+eqUnary _ _ = False
+
+instance Hashable (UnaryOp arg ret) where
+  hashWithSalt s PrimNeg = s `hashWithSalt` (0 :: Int)
+  hashWithSalt s PrimNot = s `hashWithSalt` (1 :: Int)
+  hashWithSalt s PrimFst = s `hashWithSalt` (2 :: Int)
+  hashWithSalt s PrimSnd = s `hashWithSalt` (3 :: Int)
 
 -- | Computes the return type of a primitive unary operation.
 unaryReturnType :: SLType arg -> UnaryOp arg ret -> SLType ret
@@ -88,6 +117,35 @@ data BinaryOp :: LType -> LType -> LType -> Type where
   PrimNeq :: BinaryOp ty ty LBool
 
 deriving instance Show (BinaryOp arg1 arg2 ret)
+
+eqBinary :: BinaryOp a b c -> BinaryOp d e f -> Bool
+eqBinary PrimAdd PrimAdd = True
+eqBinary PrimSub PrimSub = True
+eqBinary PrimMul PrimMul = True
+eqBinary PrimDiv PrimDiv = True
+eqBinary PrimAnd PrimAnd = True
+eqBinary PrimOr PrimOr = True
+eqBinary PrimLT PrimLT = True
+eqBinary PrimGT PrimGT = True
+eqBinary PrimLE PrimLE = True
+eqBinary PrimGE PrimGE = True
+eqBinary PrimEq PrimEq = True
+eqBinary PrimNeq PrimNeq = True
+eqBinary _ _ = False
+
+instance Hashable (BinaryOp arg1 arg2 ret) where
+  hashWithSalt s PrimAdd = s `hashWithSalt` (0 :: Int)
+  hashWithSalt s PrimSub = s `hashWithSalt` (1 :: Int)
+  hashWithSalt s PrimMul = s `hashWithSalt` (2 :: Int)
+  hashWithSalt s PrimDiv = s `hashWithSalt` (3 :: Int)
+  hashWithSalt s PrimAnd = s `hashWithSalt` (4 :: Int)
+  hashWithSalt s PrimOr = s `hashWithSalt` (5 :: Int)
+  hashWithSalt s PrimLT = s `hashWithSalt` (6 :: Int)
+  hashWithSalt s PrimGT = s `hashWithSalt` (7 :: Int)
+  hashWithSalt s PrimLE = s `hashWithSalt` (8 :: Int)
+  hashWithSalt s PrimGE = s `hashWithSalt` (9 :: Int)
+  hashWithSalt s PrimEq = s `hashWithSalt` (10 :: Int)
+  hashWithSalt s PrimNeq = s `hashWithSalt` (11 :: Int)
 
 -- | Computes the return type of a primitive binary operation.
 binaryReturnType :: SLType arg1 -> SLType arg2 -> BinaryOp arg1 arg2 ret -> SLType ret
