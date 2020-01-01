@@ -212,9 +212,7 @@ step (Var prf) = \case {} $ prf -- Empty case because an Elem instance is imposs
 step e@(Lambda _ body) = StepValue (Value e (`subst` body))
 step (App lam arg) = case step lam of
   StepAST lam'   -> StepAST (App lam' arg)
-  StepValue lam' -> case step arg of
-    StepAST arg'   -> StepAST (App (expr lam') arg')
-    StepValue arg' -> StepAST (val lam' $ expr arg')
+  StepValue lam' -> StepAST (val lam' arg)
 step (Fix e) = case step e of
   StepAST e'   -> StepAST (Fix e')
   StepValue e' -> StepAST $ unfix (expr e') (val e')

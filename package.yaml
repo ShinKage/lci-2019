@@ -64,3 +64,6 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - lab
+    - hspec
+    - hspec-megaparsec
+    - QuickCheck

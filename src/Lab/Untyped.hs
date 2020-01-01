@@ -62,6 +62,20 @@ data Untyped :: Type where
 
 deriving instance Show Untyped
 
+instance Eq Untyped where
+  (UIntE n) == (UIntE n') = n == n'
+  (UBoolE b) == (UBoolE b') = b == b'
+  UUnitE == UUnitE = True
+  (UPrimUnaryOp op e) == (UPrimUnaryOp op' e') = op `eqUnary` op' && e == e'
+  (UPrimBinaryOp op e1 e2) == (UPrimBinaryOp op' e1' e2') = op `eqBinary` op' && e1 == e1' && e2 == e2'
+  (UCond c e1 e2) == (UCond c' e1' e2') = c == c' && e1 == e1' && e2 == e2'
+  (ULambda n ty e) == (ULambda n' ty' e') = n == n' && ty == ty' && e == e'
+  (UVar n) == (UVar n') = n == n'
+  (UApp e1 e2) == (UApp e1' e2') = e1 == e1' && e2 == e2'
+  (UPair e1 e2) == (UPair e1' e2') = e1 == e1' && e2 == e2'
+  (UFix e) == (UFix e') = e == e'
+  _ == _ = False
+
 -- | Typechecks an untyped AST. Produces a well-formed typed AST in CPS style.
 -- The continuation is required to avoid complex type definition and
 -- existential types to return the dependently typed AST.

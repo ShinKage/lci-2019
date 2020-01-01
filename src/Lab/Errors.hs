@@ -22,6 +22,7 @@ data LabError
   | ParseError String
   -- | Generic code generation error.
   | CodegenError String
+  deriving (Eq, Show)
 
 prettyError :: LabError -> Doc AnsiStyle
 prettyError (ExpectedType (SomeSing t1) (SomeSing t2) msg) =

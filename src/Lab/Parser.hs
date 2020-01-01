@@ -12,7 +12,7 @@
 --
 -------------------------------------------------------------------------------
 
-module Lab.Parser (parseLanguage) where
+module Lab.Parser where
 
 import           Control.Monad.Combinators.Expr
 import           Data.Functor (($>))
@@ -90,11 +90,11 @@ parseAtom = try (tokUnit $> UUnitE) <|> choice [ parens parseLanguage
                    ]
 
 reserved :: [String]
-reserved = ["if", "then", "else", "let", "in", "int", "bool", "unit", "true", "false"]
+reserved = ["if", "then", "else", "let", "in", "int", "bool", "unit", "true", "false", "void"]
 
 identifier :: Parser Text
 identifier = pack <$> (lexeme . try) (p >>= check)
-  where p = (:) <$> letterChar <*> many alphaNumChar <?> "variable"
+  where p = (:) <$> letterChar <*> many (alphaNumChar <|> char '_') <?> "variable"
         check x = if x `elem` reserved
                      then fail $ "keyword " ++ show x ++ " cannot be an identifier"
                      else pure x
@@ -112,6 +112,7 @@ typeExpr = choice [ parens types
                   , tokIntType $> toSing LInt
                   , tokBoolType $> toSing LBool
                   , tokUnitType $> toSing LUnit
+                  , tokVoidType $> toSing LVoid
                   , pairType
                   ]
 
@@ -194,6 +195,9 @@ tokBoolType = literal "bool"
 
 tokUnitType :: Parser ()
 tokUnitType = literal "unit"
+
+tokVoidType :: Parser ()
+tokVoidType = literal "void"
 
 tokArrow :: Parser ()
 tokArrow = literal "->"

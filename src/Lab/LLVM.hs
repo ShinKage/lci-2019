@@ -62,9 +62,6 @@ wrapper ty cenv = buildModuleT "exe" $ flip runStateT emptyEnvState $ do
     modify $ \env -> env { decls = decls' }
     e' <- codegen (expr cenv)
     ret e'
-    -- case ty %~ SLUnit of
-    --   Proved Refl -> retVoid
-    --   Disproved _ -> LLVM.ret e'
 
 labToLLVM :: LType -> Type
 labToLLVM LInt  = i32
