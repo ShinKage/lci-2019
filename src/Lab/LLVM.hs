@@ -42,16 +42,19 @@ import Lab.Decls
 import Lab.Types
 import Lab.Errors
 
+import Debug.Trace
+
 data EnvState = EnvState { decls :: [Operand]
                          , args :: [Operand]
                          , lets :: [Operand]
                          , lastFun :: Int
                          , lastFunOperand :: Maybe Operand
                          , lastFunRet :: AST.Type
+                         , genBody :: Bool
                          }
 
 emptyEnvState :: EnvState
-emptyEnvState = EnvState [] [] [] 0 Nothing LLVM.void
+emptyEnvState = EnvState [] [] [] 0 Nothing LLVM.void False
 
 -- | Wraps the generated code in a single function.
 wrapper :: (MonadFix m, MonadError LabError m) => SLType ty -> CodegenEnv -> m Module
@@ -59,7 +62,7 @@ wrapper ty cenv = buildModuleT "exe" $ flip runStateT emptyEnvState $ do
   decls' <- topLevelFunctions (decl cenv)
   function "expr" [] (labToLLVM $ fromSing ty) $ \[] -> mdo
     _ <- block `named` "entry"
-    modify $ \env -> env { decls = decls' }
+    modify $ \env -> env { decls = reverse decls', genBody = True }
     e' <- codegen (expr cenv)
     ret e'
 
@@ -74,16 +77,19 @@ labToLLVM LVoid = error "Void cannot be instantiated"
 topLevelFunctions :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadModuleBuilder m)
                   => [Declaration]
                   -> m [Operand]
-topLevelFunctions decls' = forM decls' $ \dec -> mdo
+topLevelFunctions decls' = forM (reverse decls') $ \dec -> mdo
     let argTypes = getArgTypes (argsType dec)
     let retty = labToLLVM $ retType dec
     name <- getFunName
     f <- function name argTypes retty $ \args' -> do
       modify $ \env -> env { args = reverse args', lastFunOperand = Just f, lastFunRet = retty, lets = [] }
       _ <- block `named` "entry"
+      traceM (show $ body dec)
       body' <- codegen (body dec)
       modify $ \env -> env { args = [], lastFunOperand = Nothing, lastFunRet = LLVM.void, lets = [] }
       ret body'
+    ds' <- gets decls
+    modify $ \env -> env { decls = ds' ++ [f] }
     pure f
 
   where argName :: Int -> ParameterName
@@ -130,9 +136,14 @@ codegen app@(CApp _ _) = do
   emitInstr retty instr
 codegen (CCall i) = do
   ds <- gets decls
-  case index' i ds of
-    Just d -> pure d
-    Nothing -> throwError (CodegenError "Function index out of range")
+  gen <- gets genBody
+  if gen
+    then case index' i ds of
+           Just d -> pure d
+           Nothing -> throwError (CodegenError "Function index out of range")
+    else case index' (length ds - i) ds of
+           Just d -> pure d
+           Nothing -> throwError (CodegenError "Function index out of range")
 codegen CRecToken = gets lastFunOperand >>= \case
   Just f -> pure f
   Nothing -> throwError (CodegenError "Token can be only placed in recursive functions")
@@ -169,9 +180,14 @@ funCall :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBui
 funCall i params = do
   ds <- gets decls
   params' <- traverse (fmap (, []) . codegen) params
-  case index' i ds of
-    Just d  -> call d params'
-    Nothing -> throwError $ CodegenError "Function index out of range"
+  gen <- gets genBody
+  if gen
+    then case index' i ds of
+           Just d -> call d params'
+           Nothing -> throwError (CodegenError "Function index out of range")
+    else case index' (length ds - i) ds of
+           Just d -> call d params'
+           Nothing -> throwError (CodegenError "Function index out of range")
 
 litInt :: MonadIRBuilder m => Integer -> m Operand
 litInt n = pure $ int32 n

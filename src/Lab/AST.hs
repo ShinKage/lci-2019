@@ -62,9 +62,9 @@ deriving instance Show (AST env ty)
 
 -- | Computes the return type of an expression within an environment.
 returnType :: SList env -> AST env ty -> SLType ty
-returnType _ (IntE _) = sing
+returnType _ (IntE _)  = sing
 returnType _ (BoolE _) = sing
-returnType _ UnitE = sing
+returnType _ UnitE     = sing
 returnType env (PrimUnaryOp op e) = unaryReturnType (returnType env e) op
 returnType env (PrimBinaryOp op e1 e2) = binaryReturnType (returnType env e1) (returnType env e2) op
 returnType env (Cond _ e1 _) = returnType env e1

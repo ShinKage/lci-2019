@@ -50,8 +50,8 @@ maybeElem SNil _ = Nothing
 maybeElem (SCons x xs) idx
   | idx < 0   = Nothing
   | idx == 0  = Just (x :&: Here)
-  | otherwise = maybeElem xs (idx - 1) >>= \case
-                  y :&: prf -> Just $ y :&: There prf
+  | otherwise = do (y :&: prf) <- maybeElem xs (idx - 1)
+                   Just $ y :&: There prf
 
 -- | Runtime (dependent) representation of a list length.
 data Length :: [a] -> Type where
