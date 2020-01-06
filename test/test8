@@ -1,0 +1,5 @@
+(fix \f:int->int->int,x:int,acc:int. if x == 0 then acc else f (x - 1) (x * acc)) 5 1
+step
+codegen
+jit
+quit

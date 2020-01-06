@@ -24,7 +24,9 @@ module Lab.Decls where
 
 import Control.Monad.Writer
 import Control.Monad.State
+import Control.Monad.Reader
 import qualified Control.Monad.State.Strict as Strict
+import Data.Bifunctor
 import Data.Kind
 import Data.Hashable
 import Data.HashSet (HashSet)
@@ -216,14 +218,11 @@ fromAST' :: Int -> SList env -> AST env ty -> CodegenAST
 fromAST' vars env (PrimUnaryOp op e) = CPrimUnaryOp op (fromAST' vars env e)
 fromAST' vars env (PrimBinaryOp op e1 e2) = CPrimBinaryOp op (fromAST' vars env e1) (fromAST' vars env e2)
 fromAST' vars env (Cond c e1 e2) = CCond (fromAST' vars env c) (fromAST' vars env e1) (fromAST' vars env e2)
--- fromAST' vars _   (Var e) = if vars == elemToIntegral e then CRecToken else CVar (elemToIntegral e)
 fromAST' _ _ (Var e) = CVar (elemToIntegral e)
 fromAST' vars env (Pair e1 e2) = CPair (fromAST' vars env e1) (fromAST' vars env e2)
 fromAST' vars env (Lambda sty e) = let env' = SCons sty env in
                                        CLambda [fromSing sty] (fromSing $ returnType env' e) (fromAST' vars env' e)
 fromAST' vars env (App lam arg) = CApp (fromAST' vars env lam) (fromAST' vars env arg)
--- fromAST' vars env (Fix (Lambda ret e)) = fromAST' (vars + 1) (SCons ret env) e
--- fromAST' _ _ (Fix _) = error "Unsupported lambda reference in fix operator"
 fromAST' vars env (Fix e) = CFix (fromAST' vars env e)
 fromAST' _ _ (IntE n) = CIntE n
 fromAST' _ _ (BoolE b) = CBoolE b
@@ -237,7 +236,7 @@ freeVars' :: Int -> [LType] -> CodegenAST -> [(LType, Int)]
 freeVars' i types (CPrimBinaryOp _ e1 e2) = freeVars' i types e1 ++ freeVars' i types e2
 freeVars' i types (CPrimUnaryOp _ e) = freeVars' i types e
 freeVars' i types (CCond c e1 e2) = freeVars' i types c ++ freeVars' i types e1 ++ freeVars' i types e2
-freeVars' i types (CVar v) = [(types !! v, (v - i)) | v >= i]
+freeVars' i types (CVar v) = [(types !! v, v - i) | v >= i]
 freeVars' i types (CPair e1 e2) = freeVars' i types e1 ++ freeVars' i types e2
 freeVars' i types (CApp lam arg) = freeVars' i types lam ++ freeVars' i types arg
 freeVars' i types (CLambda argsTy _ e) = freeVars' (i + length argsTy) (argsTy ++ types) e
@@ -247,20 +246,22 @@ freeVars' _ _ _ = []
 
 -- | Applies the closure conversion transformation to the expression.
 closureConv :: CodegenAST -> CodegenAST
-closureConv = closureConv' []
+closureConv = flip runReader [] . closureConv'
 
-closureConv' :: [LType] -> CodegenAST -> CodegenAST
-closureConv' types lam@(CLambda vs ret e) = let e' = closureConv' (vs ++ types) e
-                                                vars = freeVars' 0 types lam in
-                                                (CLambda (map fst vars ++ vs) ret e') `applyTo` map snd vars
-closureConv' types (CPrimUnaryOp op e) = CPrimUnaryOp op (closureConv' types e)
-closureConv' types (CPrimBinaryOp op e1 e2) = CPrimBinaryOp op (closureConv' types e1) (closureConv' types e2)
-closureConv' types (CCond c e1 e2) = CCond (closureConv' types c) (closureConv' types e1) (closureConv' types e2)
-closureConv' types (CPair e1 e2) = CPair (closureConv' types e1) (closureConv' types e2)
-closureConv' types (CApp lam arg) = CApp (closureConv' types lam) (closureConv' types arg)
-closureConv' types (CFix e) = CFix (closureConv' types e)
-closureConv' types (CLet e1 e2) = CLet (closureConv' types e1) (closureConv' types e2)
-closureConv' _ e = e
+closureConv' :: CodegenAST -> Reader [LType] CodegenAST
+closureConv' lam@(CLambda vs ret e) = do
+  e' <- local (vs ++) (closureConv' e)
+  types <- ask
+  let vars = freeVars' 0 types lam
+  pure $ CLambda (map fst vars ++ vs) ret e' `applyTo` map snd vars
+closureConv' (CPrimUnaryOp op e) = CPrimUnaryOp op <$> closureConv' e
+closureConv' (CPrimBinaryOp op e1 e2) = CPrimBinaryOp op <$> closureConv' e1 <*> closureConv' e2
+closureConv' (CCond c e1 e2) = CCond <$> closureConv' c <*> closureConv' e1 <*> closureConv' e2
+closureConv' (CPair e1 e2) = CPair <$> closureConv' e1 <*> closureConv' e2
+closureConv' (CApp lam arg) = CApp <$> closureConv' lam <*> closureConv' arg
+closureConv' (CFix e) = CFix <$> closureConv' e
+closureConv' (CLet e1 e2) = CLet <$> closureConv' e1 <*> closureConv' e2
+closureConv' e = pure e
 
 applyTo :: CodegenAST -> [Int] -> CodegenAST
 applyTo = foldl (\e a -> CApp e $ CVar a)
@@ -298,20 +299,28 @@ smash e = e
 
 -- | Removes explicit fix operator with recursive call tokens ready for codegen.
 unfix :: CodegenAST -> CodegenAST
-unfix = unfix' 0
+unfix = flip runReader (False, 0) . unfix'
 
-unfix' :: Int -> CodegenAST -> CodegenAST
-unfix' vars (CPrimUnaryOp op e) = CPrimUnaryOp op (unfix' vars e)
-unfix' vars (CPrimBinaryOp op e1 e2) = CPrimBinaryOp op (unfix' vars e1) (unfix' vars e2)
-unfix' vars (CCond c e1 e2) = CCond (unfix' vars c) (unfix' vars e1) (unfix' vars e2)
-unfix' vars (CVar e) = if vars == e then CRecToken else CVar e
-unfix' vars (CPair e1 e2) = CPair (unfix' vars e1) (unfix' vars e2)
-unfix' vars (CLambda sty ret e) = CLambda sty ret (unfix' (vars + length sty) e)
-unfix' vars (CApp lam arg) = CApp (unfix' vars lam) (unfix' vars arg)
-unfix' vars (CFix (CLambda _ _ e)) = unfix' vars e
-unfix' _ (CFix _) = error "Unsupported lambda reference in fix operator"
-unfix' vars (CLet e1 e2) = CLet (unfix' vars e1) (unfix' (vars + 1) e2)
-unfix' _ e = e
+unfix' :: CodegenAST -> Reader (Bool, Int) CodegenAST
+unfix' (CPrimUnaryOp op e) = CPrimUnaryOp op <$> unfix' e
+unfix' (CPrimBinaryOp op e1 e2) = CPrimBinaryOp op <$> unfix' e1 <*> unfix' e2
+unfix' (CCond c e1 e2) = CCond <$> unfix' c <*> unfix' e1 <*> unfix' e2
+unfix' (CPair e1 e2) = CPair <$> unfix' e1 <*> unfix' e2
+unfix' (CApp lam arg) = CApp <$> unfix' lam <*> unfix' arg
+unfix' (CLet e1 e2) = CLet <$> unfix' e1 <*> local (second (+ 1)) (unfix' e2)
+unfix' (CVar e) = do
+  (seen, vars) <- ask
+  pure $ if seen && vars == e then CRecToken else CVar e
+unfix' (CLambda sty ret e) = do
+  (seen, vars) <- ask
+  e' <- local (const (seen, if seen then vars + length sty else vars)) (unfix' e)
+  pure $ CLambda sty ret e'
+unfix' (CFix (CLambda _ _ e)) = do
+  (seen, vars) <- ask
+  if seen then error "Unsupported nested fixes"
+          else local (const (True, vars)) (unfix' e)
+unfix' (CFix _) = error "Unsupported lambda refernce in fix operator"
+unfix' e = pure e
 
 buildEnv :: AST '[] ty -> CodegenEnv
 buildEnv ast = let (code, ds) = flip evalState 0 . runWriterT . liftLam . closureConv . unfix . smash $ fromAST SNil ast

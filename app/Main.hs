@@ -82,8 +82,8 @@ genIR _ tast = do
   renderPretty . vsep . fmap prettyDecl $ ds
   renderPretty $ pretty ("Body:" :: String)
   renderPretty . prettyCodegenAST $ e
-    where prettyDecl (Decl {argsType=as, body=b}) =
-            hcat (punctuate comma (fmap pretty as))
+    where prettyDecl Decl {argsType = as, body = b} =
+            hcat (punctuate comma $ fmap pretty as)
               <+> colon
               <+> prettyCodegenAST b
 
@@ -112,8 +112,7 @@ runJit ty tast = do
     withModuleFromAST context m $ \m' ->
     withPassManager defaultPassSetSpec $ \_ -> do
       verify m'
-      s <- moduleLLVMAssembly m'
-      BS.putStrLn s
+      moduleLLVMAssembly m' >>= BS.putStrLn
       jit context $ \executionEngine ->
         LLVM.withModuleInEngine executionEngine m' $ \ee ->
         LLVM.getFunction ee (LLVM.Name "expr") >>= \case
