@@ -1,0 +1,4 @@
+(fix \f:int->int,x:int.if x == 0 then 1 else x * f (x - 1)) 5
+step
+codegen
+jit

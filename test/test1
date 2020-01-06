@@ -1,0 +1,4 @@
+(\x:int.x + 2) 4
+step
+codegen
+jit

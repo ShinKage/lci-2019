@@ -76,13 +76,19 @@ parse = either (throwError . ParseError . P.errorBundlePretty) pure . P.parse (p
 
 printAST :: MonadIO m => Sing ty -> AST '[] ty -> m ()
 printAST sty ast =
-  renderPretty $ PP.pretty (show ast) <+> PP.pretty ("::" :: String) <+> PP.pretty sty
+  renderPretty $ PP.pretty (show ast) <+> PP.colon <> PP.colon <+> PP.pretty sty
 
 genIR :: (MonadError LabError m, MonadFix m, MonadIO m) => SLType ty -> AST '[] ty -> m ()
 genIR _ ast = do
-  let env = buildEnv ast
-  renderPretty . PP.fillSep . fmap (prettyCodegenAST . body) . decl $ env
-  renderPretty . prettyCodegenAST . Lab.Decls.expr $ env
+  let Env { Lab.Decls.expr=e, decl=ds } = buildEnv ast
+  renderPretty $ PP.pretty ("Top-Level declarations:" :: String)
+  renderPretty . PP.vsep . fmap prettyDecl $ ds
+  renderPretty $ PP.pretty ("Body:" :: String)
+  renderPretty . prettyCodegenAST $ e
+    where prettyDecl (Decl {argsType=as, body=b}) =
+            PP.hcat (PP.punctuate PP.comma (fmap PP.pretty as))
+              <+> PP.colon
+              <+> prettyCodegenAST b
 
 genLLVM :: (MonadError LabError m, MonadFix m, MonadIO m) => SLType ty -> AST '[] ty -> m ()
 genLLVM ty ast = do
@@ -123,7 +129,7 @@ runJit ty ast = do
 -- FIXME: Nested pairs
 ffiRet :: SLType ty -> (forall t. (Show t, Storable t) => (Ptr CType, RetType t, IO ()) -> IO r) -> IO r
 ffiRet SLInt k = k (ffi_type_hs_int, retInt, pure ())
-ffiRet SLBool k = k (ffi_type_hs_int, mkStorableRetType ffi_type_hs_int :: RetType Bool, pure ())
+ffiRet SLBool k = k (ffi_type_hs_int, mkStorableRetType ffi_type_uint8 :: RetType Bool, pure ())
 ffiRet SLUnit k = k (ffi_type_pointer, mkStorableRetType ffi_type_pointer :: RetType (), pure ())
 ffiRet (SLProduct a b) k =
   ffiRet a $ \(r1, _ :: RetType a, f1) ->

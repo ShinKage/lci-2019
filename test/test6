@@ -1,0 +1,4 @@
+(\z:int.(\x:int,y:int.x+y+z) z z) 2
+step
+codegen
+jit

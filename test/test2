@@ -1,0 +1,4 @@
+(\x:{int,bool}. ~(snd x)) {42, false}
+step
+codegen
+jit

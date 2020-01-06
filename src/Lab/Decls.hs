@@ -52,6 +52,8 @@ import Lab.AST
 import Lab.Types
 import Lab.Utils
 
+import Debug.Trace
+
 -- | Stripped down version of the Lab AST, with support for top level
 -- function declarations and call mechanism. This IR is not typed and
 -- is meant to be derived only by translation from the typed AST.
@@ -246,7 +248,7 @@ freeVars' :: Int -> [LType] -> CodegenAST -> [(LType, Int)]
 freeVars' i types (CPrimBinaryOp _ e1 e2) = freeVars' i types e1 ++ freeVars' i types e2
 freeVars' i types (CPrimUnaryOp _ e) = freeVars' i types e
 freeVars' i types (CCond c e1 e2) = freeVars' i types c ++ freeVars' i types e1 ++ freeVars' i types e2
-freeVars' i types (CVar v) = [(types !! v, v) | v >= i]
+freeVars' i types (CVar v) = [(types !! v, (v - i)) | v >= i]
 freeVars' i types (CPair e1 e2) = freeVars' i types e1 ++ freeVars' i types e2
 freeVars' i types (CApp lam arg) = freeVars' i types lam ++ freeVars' i types arg
 freeVars' i types (CLambda argsTy _ e) = freeVars' (i + length argsTy) (argsTy ++ types) e
@@ -256,17 +258,20 @@ freeVars' _ _ _ = []
 
 -- | Applies the closure conversion transformation to the expression.
 closureConv :: CodegenAST -> CodegenAST
-closureConv lam@(CLambda vs ret e) = let e' = closureConv e
-                                         vars = freeVars lam in
-                                         CLambda (map fst vars ++ vs) ret (e' `applyTo` map snd vars)
-closureConv (CPrimUnaryOp op e) = CPrimUnaryOp op (closureConv e)
-closureConv (CPrimBinaryOp op e1 e2) = CPrimBinaryOp op (closureConv e1) (closureConv e2)
-closureConv (CCond c e1 e2) = CCond (closureConv c) (closureConv e1) (closureConv e2)
-closureConv (CPair e1 e2) = CPair (closureConv e1) (closureConv e2)
-closureConv (CApp lam arg) = CApp (closureConv lam) (closureConv arg)
-closureConv (CFix e) = CFix (closureConv e)
-closureConv (CLet e1 e2) = CLet (closureConv e1) (closureConv e2)
-closureConv e = e
+closureConv = closureConv' []
+
+closureConv' :: [LType] -> CodegenAST -> CodegenAST
+closureConv' types lam@(CLambda vs ret e) = let e' = closureConv' (vs ++ types) e
+                                                vars = freeVars' 0 types lam in
+                                                (CLambda (map fst vars ++ vs) ret e') `applyTo` map snd vars
+closureConv' types (CPrimUnaryOp op e) = CPrimUnaryOp op (closureConv' types e)
+closureConv' types (CPrimBinaryOp op e1 e2) = CPrimBinaryOp op (closureConv' types e1) (closureConv' types e2)
+closureConv' types (CCond c e1 e2) = CCond (closureConv' types c) (closureConv' types e1) (closureConv' types e2)
+closureConv' types (CPair e1 e2) = CPair (closureConv' types e1) (closureConv' types e2)
+closureConv' types (CApp lam arg) = CApp (closureConv' types lam) (closureConv' types arg)
+closureConv' types (CFix e) = CFix (closureConv' types e)
+closureConv' types (CLet e1 e2) = CLet (closureConv' types e1) (closureConv' types e2)
+closureConv' _ e = e
 
 applyTo :: CodegenAST -> [Int] -> CodegenAST
 applyTo = foldl (\e a -> CApp e $ CVar a)

@@ -1,0 +1,4 @@
+(\z:int.(\x:bool,y:int. y <= 0 & x) (z >= 0) z) 2
+step
+codegen
+jit
