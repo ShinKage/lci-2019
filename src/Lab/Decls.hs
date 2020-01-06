@@ -20,18 +20,7 @@
 --
 -------------------------------------------------------------------------------
 
-module Lab.Decls ( CodegenAST(..)
-                 , Declaration(..)
-                 , CodegenEnv(..)
-                 , closureConv
-                 , cse
-                 , buildEnv
-                 , freeVars
-                 , fromAST
-                 , liftLam
-                 , prettyCodegenAST
-                 , smash
-                 , unfix) where
+module Lab.Decls where
 
 import Control.Monad.Writer
 import Control.Monad.State

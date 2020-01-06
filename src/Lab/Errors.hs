@@ -66,3 +66,6 @@ pairRequired st1 = PairRequired (SomeSing st1)
 
 undefReference :: String -> LabError
 undefReference = UndefinedReference
+
+parseError :: String -> LabError
+parseError = ParseError

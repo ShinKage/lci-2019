@@ -20,7 +20,7 @@
 --
 -------------------------------------------------------------------------------
 
-module Lab.Eval (Value(..), Step(..), eval, step, prettyStep) where
+module Lab.Eval where
 
 import Data.Kind
 import Data.List.Extra
@@ -42,8 +42,8 @@ type family Concrete (t :: LType) :: Type where
 -- | Lab value representation. Holds both the reduced AST and the corresponding
 -- Haskell raw value.
 data Value :: LType -> Type where
-  Value :: { expr :: AST '[] ty
-           , val  :: Concrete ty
+  Value :: { ast :: AST '[] ty
+           , val :: Concrete ty
            } -> Value ty
 
 -- | Evaluation function for Lab.
@@ -58,7 +58,7 @@ eval (App lam arg) = eval $ val (eval lam) arg
 eval (Fix e) = eval $ unfix e (val $ eval e)
 eval (Pair f s) = let f' = eval f
                       s' = eval s in
-                      Value (Pair (expr f') (expr s')) (val f', val s')
+                      Value (Pair (ast f') (ast s')) (val f', val s')
 eval (PrimUnaryOp PrimNeg e) = let v = negate $ val $ eval e in Value (IntE v) v
 eval (PrimUnaryOp PrimNot e) = let v = not $ val $ eval e in Value (BoolE v) v
 eval (PrimUnaryOp PrimFst e) = case eval e of
@@ -117,14 +117,14 @@ eval (PrimBinaryOp PrimGE e1 e2) =
       v2 = val $ eval e2
       v  = v1 >= v2
   in  Value (BoolE v) v
-eval (PrimBinaryOp PrimEq e1 e2) = case (expr (eval e1), expr (eval e2)) of
+eval (PrimBinaryOp PrimEq e1 e2) = case (ast (eval e1), ast (eval e2)) of
   (IntE  n, IntE m ) -> Value (BoolE $ n == m) (n == m)
   (BoolE n, BoolE m) -> Value (BoolE $ n == m) (n == m)
   (UnitE, UnitE) -> Value (BoolE True) True
   -- If we explicitly pattern match on conflicting cases, Haskell recognizes the conflicting constraint
   -- but we have not found yet, a way to generate an absurd value.
   (_, _) -> error "impossible match"
-eval (PrimBinaryOp PrimNeq e1 e2) = case (expr (eval e1), expr (eval e2)) of
+eval (PrimBinaryOp PrimNeq e1 e2) = case (ast (eval e1), ast (eval e2)) of
   (IntE  n, IntE m ) -> Value (BoolE $ n /= m) (n /= m)
   (BoolE n, BoolE m) -> Value (BoolE $ n /= m) (n /= m)
   (UnitE, UnitE) -> Value (BoolE False) False
@@ -197,8 +197,8 @@ data Step :: LType -> Type where
   StepValue :: Value a -> Step a
 
 prettyStep :: Step a -> Doc AnsiStyle
-prettyStep (StepAST ast) = prettyAST ast
-prettyStep (StepValue v) = prettyAST (expr v)
+prettyStep (StepAST e) = prettyAST e
+prettyStep (StepValue v) = prettyAST (ast v)
 
 -- | Performs a single step of beta-reduction for a Lab expression.
 step :: AST '[] a -> Step a
@@ -215,12 +215,12 @@ step (App lam arg) = case step lam of
   StepValue lam' -> StepAST (val lam' arg)
 step (Fix e) = case step e of
   StepAST e'   -> StepAST (Fix e')
-  StepValue e' -> StepAST $ unfix (expr e') (val e')
+  StepValue e' -> StepAST $ unfix (ast e') (val e')
 step (Pair f s) = case step f of
   StepAST f' -> StepAST (Pair f' s)
   StepValue f' -> case step s of
-    StepAST s' -> StepAST (Pair (expr f') s')
-    StepValue s' -> StepValue $ Value (Pair (expr f') (expr s')) (val f', val s')
+    StepAST s' -> StepAST (Pair (ast f') s')
+    StepValue s' -> StepValue $ Value (Pair (ast f') (ast s')) (val f', val s')
 step (PrimUnaryOp PrimNeg e) = case step e of
   StepAST e' -> StepAST (PrimUnaryOp PrimNeg e')
   StepValue e' -> let v = negate $ val e' in StepValue $ Value (IntE v) v
@@ -238,58 +238,58 @@ step (PrimUnaryOp PrimSnd e) = case step e of
 step (PrimBinaryOp PrimAdd e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimAdd e1' e2)
   StepValue e1' -> case step e2 of
-    StepAST e2' -> StepAST (PrimBinaryOp PrimAdd (expr e1') e2')
+    StepAST e2' -> StepAST (PrimBinaryOp PrimAdd (ast e1') e2')
     StepValue e2' -> let v = val e1' + val e2' in StepValue $ Value (IntE v) v
 step (PrimBinaryOp PrimSub e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimSub e1' e2)
   StepValue e1' -> case step e2 of
-    StepAST e2' -> StepAST (PrimBinaryOp PrimSub (expr e1') e2')
+    StepAST e2' -> StepAST (PrimBinaryOp PrimSub (ast e1') e2')
     StepValue e2' -> let v = val e1' - val e2' in StepValue $ Value (IntE v) v
 step (PrimBinaryOp PrimMul e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimMul e1' e2)
   StepValue e1' -> case step e2 of
-    StepAST e2' -> StepAST (PrimBinaryOp PrimMul (expr e1') e2')
+    StepAST e2' -> StepAST (PrimBinaryOp PrimMul (ast e1') e2')
     StepValue e2' -> let v = val e1' * val e2' in StepValue $ Value (IntE v) v
 step (PrimBinaryOp PrimDiv e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimDiv e1' e2)
   StepValue e1' -> case step e2 of
-    StepAST e2' -> StepAST (PrimBinaryOp PrimDiv (expr e1') e2')
+    StepAST e2' -> StepAST (PrimBinaryOp PrimDiv (ast e1') e2')
     StepValue e2' -> let v = val e1' `div` val e2' in StepValue $ Value (IntE v) v
 step (PrimBinaryOp PrimAnd e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimAnd e1' e2)
   StepValue e1' -> case step e2 of
-    StepAST e2' -> StepAST (PrimBinaryOp PrimAnd (expr e1') e2')
+    StepAST e2' -> StepAST (PrimBinaryOp PrimAnd (ast e1') e2')
     StepValue e2' -> let v = val e1' && val e2' in StepValue $ Value (BoolE v) v
 step (PrimBinaryOp PrimOr e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimOr e1' e2)
   StepValue e1' -> case step e2 of
-    StepAST e2' -> StepAST (PrimBinaryOp PrimOr (expr e1') e2')
+    StepAST e2' -> StepAST (PrimBinaryOp PrimOr (ast e1') e2')
     StepValue e2' -> let v = val e1' || val e2' in StepValue $ Value (BoolE v) v
 step (PrimBinaryOp PrimLT e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimLT e1' e2)
   StepValue e1' -> case step e2 of
-    StepAST e2' -> StepAST (PrimBinaryOp PrimLT (expr e1') e2')
+    StepAST e2' -> StepAST (PrimBinaryOp PrimLT (ast e1') e2')
     StepValue e2' -> let v = val e1' < val e2' in StepValue $ Value (BoolE v) v
 step (PrimBinaryOp PrimGT e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimGT e1' e2)
   StepValue e1' -> case step e2 of
-    StepAST e2' -> StepAST (PrimBinaryOp PrimGT (expr e1') e2')
+    StepAST e2' -> StepAST (PrimBinaryOp PrimGT (ast e1') e2')
     StepValue e2' -> let v = val e1' > val e2' in StepValue $ Value (BoolE v) v
 step (PrimBinaryOp PrimLE e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimLE e1' e2)
   StepValue e1' -> case step e2 of
-    StepAST e2' -> StepAST (PrimBinaryOp PrimLE (expr e1') e2')
+    StepAST e2' -> StepAST (PrimBinaryOp PrimLE (ast e1') e2')
     StepValue e2' -> let v = val e1' <= val e2' in StepValue $ Value (BoolE v) v
 step (PrimBinaryOp PrimGE e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimGE e1' e2)
   StepValue e1' -> case step e2 of
-    StepAST e2' -> StepAST (PrimBinaryOp PrimGE (expr e1') e2')
+    StepAST e2' -> StepAST (PrimBinaryOp PrimGE (ast e1') e2')
     StepValue e2' -> let v = val e1' >= val e2' in StepValue $ Value (BoolE v) v
 step (PrimBinaryOp PrimEq e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimEq e1' e2)
   StepValue e1' -> case step e2 of
-    StepAST e2' -> StepAST (PrimBinaryOp PrimEq (expr e1') e2')
-    StepValue e2' -> case (expr e1', expr e2') of
+    StepAST e2' -> StepAST (PrimBinaryOp PrimEq (ast e1') e2')
+    StepValue e2' -> case (ast e1', ast e2') of
       (IntE n, IntE m) -> let v = n == m in StepValue $ Value (BoolE v) v
       (BoolE n, BoolE m) -> let v = n == m in StepValue $ Value (BoolE v) v
       (UnitE, UnitE) -> StepValue $ Value (BoolE True) True
@@ -299,8 +299,8 @@ step (PrimBinaryOp PrimEq e1 e2) = case step e1 of
 step (PrimBinaryOp PrimNeq e1 e2) = case step e1 of
   StepAST e1' -> StepAST (PrimBinaryOp PrimNeq e1' e2)
   StepValue e1' -> case step e2 of
-    StepAST e2' -> StepAST (PrimBinaryOp PrimNeq (expr e1') e2')
-    StepValue e2' -> case (expr e1', expr e2') of
+    StepAST e2' -> StepAST (PrimBinaryOp PrimNeq (ast e1') e2')
+    StepValue e2' -> case (ast e1', ast e2') of
       (IntE n, IntE m) -> let v = n /= m in StepValue $ Value (BoolE v) v
       (BoolE n, BoolE m) -> let v = n /= m in StepValue $ Value (BoolE v) v
       (UnitE, UnitE) -> StepValue $ Value (BoolE False) False

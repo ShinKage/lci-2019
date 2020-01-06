@@ -17,7 +17,7 @@
 --
 -------------------------------------------------------------------------------
 
-module Lab.Untyped (Name, Untyped(..), typecheck) where
+module Lab.Untyped where
 
 import Control.Monad.Except
 import Data.Kind

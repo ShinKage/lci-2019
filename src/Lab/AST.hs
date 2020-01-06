@@ -17,7 +17,7 @@
 --
 -------------------------------------------------------------------------------
 
-module Lab.AST (AST(..), prettyAST, returnType) where
+module Lab.AST where
 
 import Control.Monad.State.Strict
 import Data.Kind
