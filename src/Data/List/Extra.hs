@@ -65,3 +65,8 @@ deriving instance Show (Length xs)
 weakenElem :: Length prefix -> Elem xs x -> Elem (prefix ++ xs) x
 weakenElem LZ       e = e
 weakenElem (LS len) e = There $ weakenElem len e
+
+-- | Returns the length of singleton list.
+sLength :: SList xs -> Int
+sLength SNil = 0
+sLength (SCons _ xs) = 1 + sLength xs

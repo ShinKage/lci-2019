@@ -42,8 +42,6 @@ import Lab.Decls
 import Lab.Types
 import Lab.Errors
 
-import Debug.Trace
-
 data EnvState = EnvState { decls :: [Operand]
                          , args :: [Operand]
                          , lets :: [Operand]
@@ -84,7 +82,6 @@ topLevelFunctions decls' = forM (reverse decls') $ \dec -> mdo
     f <- function name argTypes retty $ \args' -> do
       modify $ \env -> env { args = reverse args', lastFunOperand = Just f, lastFunRet = retty, lets = [] }
       _ <- block `named` "entry"
-      traceM (show $ body dec)
       body' <- codegen (body dec)
       modify $ \env -> env { args = [], lastFunOperand = Nothing, lastFunRet = LLVM.void, lets = [] }
       ret body'

@@ -43,8 +43,6 @@ import Lab.AST
 import Lab.Types
 import Lab.Utils
 
-import Debug.Trace
-
 -- | Stripped down version of the Lab AST, with support for top level
 -- function declarations and call mechanism. This IR is not typed and
 -- is meant to be derived only by translation from the typed AST.

@@ -19,7 +19,7 @@
 
 module Lab.AST where
 
-import Control.Monad.State.Strict
+import Control.Monad.Reader
 import Data.Kind
 import Data.List.Extra
 import Data.Singletons.Prelude hiding (Elem)
@@ -74,56 +74,56 @@ returnType env (App lam _) = case returnType env lam of SLArrow _ ty -> ty
 returnType env (Fix e) = case returnType env e of SLArrow _ ty -> ty
 returnType env (Pair e1 e2) = SLProduct (returnType env e1) (returnType env e2)
 
-prettyAST :: AST env ty -> Doc AnsiStyle
-prettyAST = flip evalState (0, initPrec) . go
-  where updatePrec :: Prec -> (Int, Prec) -> (Int, Prec)
-        updatePrec p (i, _) = (i, p)
+prettyAST :: AST '[] ty -> Doc AnsiStyle
+prettyAST = prettyAST' SNil
 
-        go :: AST env ty -> State (Int, Prec) (Doc AnsiStyle)
-        go (IntE n) = pure $ annotate bold (pretty n)
-        go (BoolE b) = pure $ annotate bold (pretty b)
-        go UnitE = pure $ annotate bold (pretty "unit")
-        go (PrimUnaryOp op e) = do
-          prec <- gets snd
-          e' <- withState (updatePrec $ opPrecArg op) $ go e
+prettyAST' :: SList env -> AST env ty -> Doc AnsiStyle
+prettyAST' env = flip runReader initPrec . go env
+  where go :: SList env -> AST env ty -> Reader Prec (Doc AnsiStyle)
+        go env (IntE n) = pure $ annotate bold (pretty n)
+        go env (BoolE b) = pure $ annotate bold (pretty b)
+        go env UnitE = pure $ annotate bold (pretty "unit")
+        go env (PrimUnaryOp op e) = do
+          e' <- local (const $ opPrecArg op) $ go env e
+          prec <- ask
           pure $ maybeParens (prec >= opPrec op) e'
-        go (PrimBinaryOp op e1 e2) = do
-          prec <- gets snd
-          e1' <- withState (updatePrec $ binOpLeftPrec op) $ go e1
-          e2' <- withState (updatePrec $ binOpRightPrec op) $ go e2
+        go env (PrimBinaryOp op e1 e2) = do
+          e1' <- local (const $ binOpLeftPrec op) $ go env e1
+          e2' <- local (const $ binOpRightPrec op) $ go env e2
+          prec <- ask
           pure $ maybeParens (prec >= binOpPrec op) $ fillSep [e1' <+> pretty op, e2']
-        go (Cond c e1 e2) = do
-          prec <- gets snd
-          c' <- withState (updatePrec initPrec) $ go c
-          e1' <- withState (updatePrec initPrec) $ go e1
-          e2' <- withState (updatePrec initPrec) $ go e2
+        go env (Cond c e1 e2) = do
+          c' <- local (const initPrec) $ go env c
+          e1' <- local (const initPrec) $ go env e1
+          e2' <- local (const initPrec) $ go env e2
+          prec <- ask
           pure $ maybeParens (prec >= ifPrec) $
             fillSep [ pretty "if" <+> c'
                     , pretty "then" <+> e1'
                     , pretty "else" <+> e2'
                     ]
-        go (Var (elemToIntegral -> v)) = pure $ colorVar v $ pretty '#' <> pretty v
-        go (Lambda ty body) = do
-          prec <- gets snd
-          old <- gets fst
-          body' <- withState (updatePrec initPrec) $ go body
-          i <- gets fst
-          modify $ \(_, p) -> (old + 1, p)
+        go env (Var (elemToIntegral -> v)) = do
+          let i = sLength env - v - 1
+          pure $ colorVar i $ pretty '#' <> pretty i
+        go env (Lambda ty body) = do
+          body' <- local (const initPrec) $ go (SCons ty env) body
+          let i = sLength env
+          prec <- ask
           pure $ maybeParens (prec >= lambdaPrec) $
             fillSep [ pretty 'λ' <> colorVar i (pretty '#' <> pretty i) <+> pretty ':'
                                  <+> pretty ty <> pretty '.'
                     , body'
                     ]
-        go (App body arg) = do
-          prec <- gets snd
-          body' <- withState (updatePrec appLeftPrec) $ go body
-          arg' <- withState (updatePrec appRightPrec) $ go arg
+        go env (App body arg) = do
+          body' <- local (const appLeftPrec) $ go env body
+          arg' <- local (const appRightPrec) $ go env arg
+          prec <- ask
           pure $ maybeParens (prec >= appPrec) $ body' <+> arg'
-        go (Pair f s) = do
-          f' <- withState (updatePrec initPrec) $ go f
-          s' <- withState (updatePrec initPrec) $ go s
+        go env (Pair f s) = do
+          f' <- local (const initPrec) $ go env f
+          s' <- local (const initPrec) $ go env s
           pure $ sGuillemetsOut $ f' <> comma <> s'
-        go (Fix body) = do
-          prec <- gets snd
-          body' <- withState (updatePrec initPrec) $ go body
+        go env (Fix body) = do
+          body' <- local (const initPrec) $ go env body
+          prec <- ask
           pure $ maybeParens (prec >= appPrec) $ pretty "fix" <+> body'
