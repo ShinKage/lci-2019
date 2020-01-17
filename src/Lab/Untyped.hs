@@ -59,6 +59,12 @@ data Untyped :: Type where
   UPair :: Untyped -> Untyped -> Untyped
   -- | Fixpoint operator for recursive functions support.
   UFix :: Untyped -> Untyped
+  -- | Pure IO value.
+  UIOPure :: Untyped -> Untyped
+  -- | Impure IO function.
+  UIOBind :: Untyped -> Untyped -> Untyped
+  -- | Impure IO, reads a limited set of value from the stdin.
+  UIOPrimRead :: SomeSing LType -> Untyped
 
 deriving instance Show Untyped
 
@@ -74,6 +80,9 @@ instance Eq Untyped where
   (UApp e1 e2) == (UApp e1' e2') = e1 == e1' && e2 == e2'
   (UPair e1 e2) == (UPair e1' e2') = e1 == e1' && e2 == e2'
   (UFix e) == (UFix e') = e == e'
+  (UIOPure e) == (UIOPure e') = e == e'
+  (UIOBind e1 e2) == (UIOBind e1' e2') = e1 == e1' && e2 == e2'
+  (UIOPrimRead ty) == (UIOPrimRead ty') = ty == ty'
   _ == _ = False
 
 -- | Typechecks an untyped AST. Produces a well-formed typed AST in CPS style.
@@ -131,6 +140,26 @@ typecheck = go SNil []
       go env names l $ \lTy l' ->
       go env names r $ \rTy r' ->
         k (SLProduct lTy rTy) (Pair l' r')
+
+    go env names (UIOPure e) k =
+      go env names e $ \ty e' ->
+        k (SLIO ty) (IOPure e')
+
+    go env names (UIOBind x f) k =
+      go env names x $ \xTy x' ->
+      go env names f $ \fTy f' -> case fTy of
+        SLArrow argTy (SLIO retTy) -> case xTy of
+          SLIO pty -> case argTy %~ pty of
+            Proved Refl -> k (SLIO retTy) (IOBind x' f')
+            Disproved _ -> throwError $ Err.expectedType argTy pty "IO Bind operation requires that the type inside the monad and the lambda are the same"
+          _ -> throwError $ Err.ioValueError xTy "IO Bind operation requires a monadic value"
+        _ -> throwError $ Err.lambdaRequired fTy "IO Bind operation requires a monadic lambda abstraction"
+
+    go _ _ (UIOPrimRead (SomeSing t)) k = case t of
+      SLInt -> k (SLIO t) (IOPrimRead t)
+      SLBool -> k (SLIO t) (IOPrimRead t)
+      SLUnit -> k (SLIO t) (IOPrimRead t)
+      _ -> throwError $ Err.ioUnsupportedRead t "IO read supports a limited subset of types"
 
     go env names (UPrimUnaryOp PrimNot e) k =
       go env names e $ \ty' e' -> case ty' %~ SLBool of

@@ -22,6 +22,10 @@ data LabError
   | ParseError String
   -- | Generic code generation error.
   | CodegenError String
+  -- | IO value expected error.
+  | IOValueError (SomeSing LType) String
+  -- | Unsupported read type error.
+  | IOUnsupportedRead (SomeSing LType) String
   deriving (Eq, Show)
 
 prettyError :: LabError -> Doc AnsiStyle
@@ -51,6 +55,16 @@ prettyError (UndefinedReference name) =
   pretty "The name" <+> dquotes (annotate (color Red) (pretty name)) <+> pretty "is undefined in this context"
 prettyError (ParseError msg) = pretty msg
 prettyError (CodegenError msg) = pretty msg
+prettyError (IOValueError (SomeSing t) msg) =
+  vcat [ pretty "IO wrapped value required, instead got type:"
+       , indent 2 $ annotate (color Red) (pretty t)
+       , pretty msg
+       ]
+prettyError (IOUnsupportedRead (SomeSing t) msg) =
+  vcat [ pretty "Unsupported read type, got:"
+       , indent 2 $ annotate (color Red) (pretty t)
+       , pretty msg
+       ]
 
 expectedType :: SLType t1 -> SLType t2 -> String -> LabError
 expectedType st1 st2 = ExpectedType (SomeSing st1) (SomeSing st2)
@@ -69,3 +83,9 @@ undefReference = UndefinedReference
 
 parseError :: String -> LabError
 parseError = ParseError
+
+ioValueError :: SLType t1 -> String -> LabError
+ioValueError st1 = IOValueError (SomeSing st1)
+
+ioUnsupportedRead :: SLType t1 -> String -> LabError
+ioUnsupportedRead st1 = IOUnsupportedRead (SomeSing st1)

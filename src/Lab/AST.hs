@@ -57,6 +57,12 @@ data AST :: [LType] -> LType -> Type where
   Pair :: AST env a -> AST env b -> AST env (LProduct a b)
   -- | Fixpoint operator for recursive functions support.
   Fix :: AST env (LArrow a a) -> AST env a
+  -- | Pure IO operation.
+  IOPure :: AST env a -> AST env (LIO a)
+  -- | IO monadic composition.
+  IOBind :: AST env (LIO a) -> AST env (LArrow a (LIO b)) -> AST env (LIO b)
+  IOPrimRead :: SLType a -> AST env (LIO a)
+  -- IOPrimShow :: AST env a -> AST env (LIO LUnit)
 
 deriving instance Show (AST env ty)
 
@@ -73,16 +79,20 @@ returnType env (Var e) = index e env
 returnType env (App lam _) = case returnType env lam of SLArrow _ ty -> ty
 returnType env (Fix e) = case returnType env e of SLArrow _ ty -> ty
 returnType env (Pair e1 e2) = SLProduct (returnType env e1) (returnType env e2)
+returnType env (IOPure e) = SLIO (returnType env e)
+returnType env (IOBind _ e2) = case returnType env e2 of SLArrow _ ty -> ty
+returnType _ (IOPrimRead ty) = SLIO ty
+-- returnType _ (IOPrimShow e) = SLIO SLUnit
 
 prettyAST :: AST '[] ty -> Doc AnsiStyle
 prettyAST = prettyAST' SNil
 
 prettyAST' :: SList env -> AST env ty -> Doc AnsiStyle
-prettyAST' env = flip runReader initPrec . go env
+prettyAST' types = flip runReader initPrec . go types
   where go :: SList env -> AST env ty -> Reader Prec (Doc AnsiStyle)
-        go env (IntE n) = pure $ annotate bold (pretty n)
-        go env (BoolE b) = pure $ annotate bold (pretty b)
-        go env UnitE = pure $ annotate bold (pretty "unit")
+        go _ (IntE n) = pure $ annotate bold (pretty n)
+        go _ (BoolE b) = pure $ annotate bold (pretty b)
+        go _ UnitE = pure $ annotate bold (pretty "unit")
         go env (PrimUnaryOp op e) = do
           e' <- local (const $ opPrecArg op) $ go env e
           prec <- ask
@@ -127,3 +137,17 @@ prettyAST' env = flip runReader initPrec . go env
           body' <- local (const initPrec) $ go env body
           prec <- ask
           pure $ maybeParens (prec >= appPrec) $ pretty "fix" <+> body'
+        go env (IOPure e) = do
+          e' <- local (const initPrec) $ go env e
+          prec <- ask
+          pure $ maybeParens (prec >= appPrec) $ pretty "pure" <+> e'
+        go env (IOBind e1 e2) = do
+          e1' <- local (const initPrec) $ go env e1
+          e2' <- local (const initPrec) $ go env e2
+          prec <- ask
+          pure $ maybeParens (prec >= initPrec) $ e1' <+> pretty ">>=" <+> e2'
+        go env (IOPrimRead ty) = pure $ pretty "read" <+> pretty ty
+--         go env (IOPrimShow e) = do
+--           e' <- local (const initPrec) $ go env e
+--           prec <- ask
+--           pure $ maybeParens (prec >= appPrec) $ pretty "show " <+> e'

@@ -36,6 +36,7 @@ $(singletons [d|
              | LVoid
              | LProduct LType LType
              | LArrow LType LType
+             | LIO LType
     deriving (Show, Eq)
   |])
 
@@ -45,7 +46,8 @@ instance Pretty LType where
   pretty LUnit = pretty "⊤"
   pretty LVoid = pretty "⊥"
   pretty (LProduct a b)   = parens (pretty a <+> pretty "⊗" <+> pretty b)
-  pretty (LArrow arg ret) = parens (pretty arg <+> pretty "→" <+> pretty ret)
+  pretty (LArrow a b) = parens (pretty a <+> pretty "→" <+> pretty b)
+  pretty (LIO a) = pretty "IO" <+> pretty a
 
 instance Pretty (SLType ty) where
   pretty = pretty . fromSing
@@ -61,6 +63,8 @@ instance Hashable LType where
   hashWithSalt s (LArrow a b) = s `hashWithSalt` (5 :: Int)
                                   `hashWithSalt` a
                                   `hashWithSalt` b
+  hashWithSalt s (LIO a) = s `hashWithSalt` (6 :: Int)
+                             `hashWithSalt` a
 
 instance Hashable (SLType ty) where
   hashWithSalt s ty = hashWithSalt s (fromSing ty)

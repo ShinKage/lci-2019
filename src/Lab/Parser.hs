@@ -55,7 +55,11 @@ curly = between (literal "{") (literal "}")
 operatorTable :: [[Operator Parser Untyped]]
 operatorTable =
   [ [prefix "-" (UPrimUnaryOp PrimNeg), prefix "~" (UPrimUnaryOp PrimNot)]
-  , [prefix "fst" (UPrimUnaryOp PrimFst), prefix "snd" (UPrimUnaryOp PrimSnd)]
+  , [ prefix "pure" UIOPure
+    , prefix "fst" (UPrimUnaryOp PrimFst)
+    , prefix "snd" (UPrimUnaryOp PrimSnd)
+    ]
+  , [binary ">>=" UIOBind]
   , [binary "*" (UPrimBinaryOp PrimMul), binary "/" (UPrimBinaryOp PrimDiv)]
   , [binary "+" (UPrimBinaryOp PrimAdd), binary "-" (UPrimBinaryOp PrimSub)]
   , [ binary "<=" (UPrimBinaryOp PrimLE)
@@ -85,12 +89,13 @@ parseAtom = try (tokUnit $> UUnitE) <|> choice [ parens parseLanguage
                    , UIntE <$> lexeme L.decimal
                    , UBoolE <$> ((tokTrue $> True) <|> (tokFalse $> False))
                    , cond
+                   , UIOPrimRead <$> (tokRead *> typeExpr)
                    , UVar <$> identifier
                    , pair
                    ]
 
 reserved :: [String]
-reserved = ["if", "then", "else", "let", "in", "int", "bool", "unit", "true", "false", "void"]
+reserved = ["if", "then", "else", "let", "in", "int", "bool", "unit", "true", "false", "void", "pure", "fst", "snd", "IO"]
 
 identifier :: Parser Text
 identifier = pack <$> (lexeme . try) (p >>= check)
@@ -100,12 +105,17 @@ identifier = pack <$> (lexeme . try) (p >>= check)
                      else pure x
 
 types :: Parser (SomeSing LType)
-types = makeExprParser typeExpr [[typeArrow]]
+types = makeExprParser typeExpr [[ioType], [typeArrow]]
 
 typeArrow :: Operator Parser (SomeSing LType)
 typeArrow = InfixR $ from <$ tokArrow
   where
-    from (SomeSing ty1) (SomeSing ty2) = toSing (LArrow (fromSing ty1) (fromSing ty2))
+    from (SomeSing ty1) (SomeSing ty2) = toSing $ LArrow (fromSing ty1) (fromSing ty2)
+
+ioType :: Operator Parser (SomeSing LType)
+ioType = Prefix $ from <$ tokIO
+  where
+    from (SomeSing ty) = toSing $ LIO $ fromSing ty
 
 typeExpr :: Parser (SomeSing LType)
 typeExpr = choice [ parens types
@@ -202,6 +212,9 @@ tokVoidType = literal "void"
 tokArrow :: Parser ()
 tokArrow = literal "->"
 
+tokIO :: Parser ()
+tokIO = literal "IO"
+
 tokIf :: Parser ()
 tokIf = literal "if"
 
@@ -210,3 +223,9 @@ tokElse = literal "else"
 
 tokThen :: Parser ()
 tokThen = literal "then"
+
+tokPure :: Parser ()
+tokPure = literal "pure"
+
+tokRead :: Parser ()
+tokRead = literal "read"

@@ -31,11 +31,15 @@ import Lab.Errors ( LabError
                   , prettyError
                   , typeMismatch
                   , undefReference
+                  , ioValueError
+                  , ioUnsupportedRead
                   )
 
 import Lab.Eval ( Step(..)
                 , Value(..)
                 , eval
+                , interpret
+                , interpretStep
                 , prettyStep
                 , step
                 )

@@ -53,18 +53,18 @@ repl = prompt "> " >>= \case
       renderPretty $ pretty ("Expression parsed successfully with type" :: String) <+> colon <> colon <+> pretty sty
       loop untypedAST sty tast
   where loop uast sty tast = prompt "> " >>= \case
-          Just "untyped" -> printUntyped uast >> loop uast sty tast
-          Just "typed"   -> printAST sty tast >> loop uast sty tast
-          Just "eval"    -> evalAST tast >> loop uast sty tast
-          Just "step"    -> stepAST tast >> loop uast sty tast
-          Just "pretty"  -> renderPretty (prettyAST tast) >> loop uast sty tast
-          Just "codegen" -> genIR sty tast >> loop uast sty tast
-          Just "llvm"    -> genLLVM sty tast >> loop uast sty tast
-          Just "jit"     -> runJit sty tast >> loop uast sty tast
-          Just "compile" -> genASM sty tast >> loop uast sty tast
-          Just "quit"    -> quit
-          Just _         -> liftIO (putStrLn "invalid command") >> loop uast sty tast
-          Nothing        -> pure ()
+          Just "untyped"   -> printUntyped uast >> loop uast sty tast
+          Just "typed"     -> printAST sty tast >> loop uast sty tast
+          Just "eval"      -> interpretAST tast >> loop uast sty tast
+          Just "step"      -> interpretStepAST tast >> loop uast sty tast
+          Just "pretty"    -> renderPretty (prettyAST tast) >> loop uast sty tast
+          Just "codegen"   -> genIR sty tast >> loop uast sty tast
+          Just "llvm"      -> genLLVM sty tast >> loop uast sty tast
+          Just "jit"       -> runJit sty tast >> loop uast sty tast
+          Just "compile"   -> genASM sty tast >> loop uast sty tast
+          Just "quit"      -> quit
+          Just _           -> liftIO (putStrLn "invalid command") >> loop uast sty tast
+          Nothing          -> pure ()
 
 parse :: MonadError LabError m => Text -> m Untyped
 parse = either (throwError . parseError . P.errorBundlePretty) pure . P.parse (parseLanguage <* P.eof) ""
@@ -95,12 +95,27 @@ genLLVM ty tast = do
 evalAST :: MonadIO m => AST '[] ty -> m ()
 evalAST = renderPretty . prettyAST . ast . eval
 
+interpretAST :: MonadIO m => AST '[] ty -> m ()
+interpretAST e = do
+  v <- liftIO $ interpret e
+  renderPretty $ prettyAST $ ast v
+
 stepAST :: MonadIO m => AST '[] ty -> m ()
 stepAST = renderPretty . vsep . fmap prettyStep . stepDescent
   where stepDescent :: AST '[] ty -> [Step ty]
         stepDescent e = StepAST e : case step e of
           StepAST e' -> stepDescent e'
           StepValue e' -> [StepAST $ ast e']
+
+interpretStepAST :: MonadIO m => AST '[] ty -> m ()
+interpretStepAST e = fmap (vsep . fmap prettyStep) (stepDescent e) >>= renderPretty
+  where stepDescent :: MonadIO m => AST '[] ty -> m [Step ty]
+        stepDescent e = do
+          e' <- liftIO $ interpretStep e
+          ds <- case e' of
+            StepAST e' -> stepDescent e'
+            StepValue e' -> pure [StepAST $ ast e']
+          pure $ StepAST e : ds
 
 jit :: Context -> (LLVM.MCJIT -> IO a) -> IO a
 jit c = LLVM.withMCJIT c (Just 0) Nothing Nothing Nothing

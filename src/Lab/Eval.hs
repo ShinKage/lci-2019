@@ -38,6 +38,7 @@ type family Concrete (t :: LType) :: Type where
   Concrete LUnit = ()
   Concrete (LProduct ty1 ty2) = (Concrete ty1, Concrete ty2)
   Concrete (LArrow ty1 ty2) = AST '[] ty1 -> AST '[] ty2
+  Concrete (LIO ty) = Concrete ty
 
 -- | Lab value representation. Holds both the reduced AST and the corresponding
 -- Haskell raw value.
@@ -45,6 +46,123 @@ data Value :: LType -> Type where
   Value :: { ast :: AST '[] ty
            , val :: Concrete ty
            } -> Value ty
+
+-- | Evaluation function for Lab.
+interpret :: AST '[] a -> IO (Value a)
+interpret (IOPure e) = do
+  e' <- interpret e
+  pure $ Value (IOPure $ ast e') (val e')
+interpret (IOBind x f) = do
+  IOPure x' <- ast <$> interpret x
+  f' <- interpret f
+  interpret $ val f' x'
+interpret (IOPrimRead ty) = case ty of
+  SLInt -> do
+    n <- read <$> getLine
+    pure $ Value (IOPure $ IntE n) n
+  SLBool -> do
+    b <- read <$> getLine
+    pure $ Value (IOPure $ BoolE b) b
+  SLUnit -> do
+    u <- read <$> getLine
+    pure $ Value (IOPure UnitE) u
+  _ -> error "impossible match"
+interpret e@(IntE  n) = pure $ Value e n
+interpret e@(BoolE b) = pure $ Value e b
+interpret UnitE       = pure $ Value UnitE ()
+interpret (Cond c e1 e2) = do
+  c' <- interpret c
+  if val c' then interpret e1 else interpret e2
+interpret (Var prf) = \case {} $ prf -- Empty case because an Elem instance is impossible with an empty context
+interpret e@(Lambda _ body) = pure $ Value e (`subst` body)
+interpret (App lam arg) = do
+  lam' <- interpret lam
+  interpret $ val lam' arg
+interpret (Fix e) = do
+  e' <- interpret e
+  interpret $ unfix e (val e')
+interpret (Pair f s) = do
+  f' <- interpret f
+  s' <- interpret s
+  pure $ Value (Pair (ast f') (ast s')) (val f', val s')
+interpret (PrimUnaryOp PrimNeg e) = do
+  v <- negate . val <$> interpret e
+  pure $ Value (IntE v) v
+interpret (PrimUnaryOp PrimNot e) = do
+  v <- not . val <$> interpret e
+  pure $ Value (BoolE v) v
+interpret (PrimUnaryOp PrimFst e) = interpret e >>= \case
+  Value (Pair e' _) _ -> interpret e'
+  _ -> error "impossible match"
+interpret (PrimUnaryOp PrimSnd e) = interpret e >>= \case
+  Value (Pair _ e') _ -> interpret e'
+  _ -> error "impossible match"
+interpret (PrimBinaryOp PrimAdd e1 e2) = do
+  v1 <- val <$> interpret e1
+  v2 <- val <$> interpret e2
+  let v = v1 + v2
+  pure $ Value (IntE v) v
+interpret (PrimBinaryOp PrimSub e1 e2) = do
+  v1 <- val <$> interpret e1
+  v2 <- val <$> interpret e2
+  let v = v1 - v2
+  pure $ Value (IntE v) v
+interpret (PrimBinaryOp PrimMul e1 e2) = do
+  v1 <- val <$> interpret e1
+  v2 <- val <$> interpret e2
+  let v = v1 * v2
+  pure $ Value (IntE v) v
+interpret (PrimBinaryOp PrimDiv e1 e2) = do
+  v1 <- val <$> interpret e1
+  v2 <- val <$> interpret e2
+  let v = v1 `div` v2
+  pure $ Value (IntE v) v
+interpret (PrimBinaryOp PrimAnd e1 e2) = do
+  v1 <- val <$> interpret e1
+  v2 <- val <$> interpret e2
+  let v = v1 && v2
+  pure $ Value (BoolE v) v
+interpret (PrimBinaryOp PrimOr e1 e2) = do
+  v1 <- val <$> interpret e1
+  v2 <- val <$> interpret e2
+  let v = v1 || v2
+  pure $ Value (BoolE v) v
+interpret (PrimBinaryOp PrimLT e1 e2) = do
+  v1 <- val <$> interpret e1
+  v2 <- val <$> interpret e2
+  let v = v1 < v2
+  pure $ Value (BoolE v) v
+interpret (PrimBinaryOp PrimGT e1 e2) = do
+  v1 <- val <$> interpret e1
+  v2 <- val <$> interpret e2
+  let v = v1 > v2
+  pure $ Value (BoolE v) v
+interpret (PrimBinaryOp PrimLE e1 e2) = do
+  v1 <- val <$> interpret e1
+  v2 <- val <$> interpret e2
+  let v = v1 <= v2
+  pure $ Value (BoolE v) v
+interpret (PrimBinaryOp PrimGE e1 e2) = do
+  v1 <- val <$> interpret e1
+  v2 <- val <$> interpret e2
+  let v = v1 >= v2
+  pure $ Value (BoolE v) v
+interpret (PrimBinaryOp PrimEq e1 e2) = do
+  e1' <- ast <$> interpret e1
+  e2' <- ast <$> interpret e2
+  case (e1', e2') of
+    (IntE  n, IntE  m) -> pure $ Value (BoolE $ n == m) (n == m)
+    (BoolE n, BoolE m) -> pure $ Value (BoolE $ n == m) (n == m)
+    (UnitE, UnitE) -> pure $ Value (BoolE True) True
+    (_, _) -> error "impossible match"
+interpret (PrimBinaryOp PrimNeq e1 e2) = do
+  e1' <- ast <$> interpret e1
+  e2' <- ast <$> interpret e2
+  case (e1', e2') of
+    (IntE  n, IntE  m) -> pure $ Value (BoolE $ n /= m) (n /= m)
+    (BoolE n, BoolE m) -> pure $ Value (BoolE $ n /= m) (n /= m)
+    (UnitE, UnitE) -> pure $ Value (BoolE False) False
+    (_, _) -> error "impossible match"
 
 -- | Evaluation function for Lab.
 eval :: AST '[] a -> Value a
@@ -131,6 +249,9 @@ eval (PrimBinaryOp PrimNeq e1 e2) = case (ast (eval e1), ast (eval e2)) of
   -- If we explicitly pattern match on conflicting cases, Haskell recognizes the conflicting constraint
   -- but we have not found yet, a way to generate an absurd value.
   (_, _) -> error "impossible match"
+eval (IOPure _) = error "IO operation not supported in regular evaluation"
+eval (IOBind _ _) = error "IO operation not supported in regular evaluation"
+eval (IOPrimRead _) = error "IO operation not supported in regular evaluation"
 
 -- | Term substitution.
 subst :: forall env sub ret. AST env sub -> AST (sub : env) ret -> AST env ret
@@ -149,6 +270,9 @@ subst e = go LZ
         go len (Pair e1 e2) = Pair (go len e1) (go len e2)
         go len (PrimUnaryOp op e1) = PrimUnaryOp op (go len e1)
         go len (PrimBinaryOp op e1 e2) = PrimBinaryOp op (go len e1) (go len e2)
+        go len (IOPure a) = IOPure (go len a)
+        go len (IOBind x f) = IOBind (go len x) (go len f)
+        go _ (IOPrimRead x) = IOPrimRead x
 
         substVar :: Length (locals :: [LType])
                  -> Elem (locals ++ sub : env) ty
@@ -181,6 +305,9 @@ shifts prefix = go LZ
         go len (Pair e1 e2)              = Pair (go len e1) (go len e2)
         go len (PrimBinaryOp op lhs rhs) = PrimBinaryOp op (go len lhs) (go len rhs)
         go len (PrimUnaryOp op arg)      = PrimUnaryOp op (go len arg)
+        go len (IOPure e) = IOPure (go len e)
+        go len (IOBind x f) = IOBind (go len x) (go len f)
+        go _ (IOPrimRead x) = IOPrimRead x
 
         shiftsVar :: Length (locals :: [LType])
                   -> Elem (locals ++ env) t
@@ -304,6 +431,138 @@ step (PrimBinaryOp PrimNeq e1 e2) = case step e1 of
       (IntE n, IntE m) -> let v = n /= m in StepValue $ Value (BoolE v) v
       (BoolE n, BoolE m) -> let v = n /= m in StepValue $ Value (BoolE v) v
       (UnitE, UnitE) -> StepValue $ Value (BoolE False) False
+      -- If we explicitly pattern match on conflicting cases, Haskell recognizes the conflicting constraint
+      -- but we have not found yet, a way to generate an absurd value.
+      _ -> error "impossible match"
+step (IOPure _) = error "IO operation not supported in regular evaluation"
+step (IOBind _ _) = error "IO operation not supported in regular evaluation"
+step (IOPrimRead _) = error "IO operation not supported in regular evaluation"
+
+-- | Evaluation function for Lab.
+interpretStep :: AST '[] a -> IO (Step a)
+interpretStep (IOPure e) = interpretStep e >>= \case
+  StepAST e' -> pure $ StepAST (IOPure e')
+  StepValue e' -> pure $ StepValue $ Value (IOPure $ ast e') (val e')
+interpretStep (IOBind x f) = interpretStep x >>= \case
+  StepAST x' -> pure $ StepAST (IOBind x' f)
+  StepValue x' -> interpretStep f >>= \case
+    StepAST f' -> pure $ StepAST (IOBind (ast x') f')
+    StepValue f' -> case ast x' of
+      IOPure x'' -> pure $ StepAST (val f' x'')
+      _ -> error "impossible match"
+interpretStep (IOPrimRead ty) = case ty of
+  SLInt -> do
+    n <- read <$> getLine
+    pure $ StepValue $ Value (IOPure $ IntE n) n
+  SLBool -> do
+    b <- read <$> getLine
+    pure $ StepValue $ Value (IOPure $ BoolE b) b
+  SLUnit -> do
+    u <- read <$> getLine
+    pure $ StepValue $ Value (IOPure UnitE) u
+  _ -> error "impossible match"
+interpretStep e@(IntE  n)    = pure $ StepValue (Value e n)
+interpretStep e@(BoolE b)    = pure $ StepValue (Value e b)
+interpretStep UnitE          = pure $ StepValue (Value UnitE ())
+interpretStep (Cond c e1 e2) = interpretStep c >>= \case
+  StepAST c'   -> pure $ StepAST (Cond c' e1 e2)
+  StepValue c' -> pure $ StepAST (if val c' then e1 else e2)
+interpretStep (Var prf) = \case {} $ prf -- Empty case because an Elem instance is impossible with an empty context
+interpretStep e@(Lambda _ body) = pure $ StepValue (Value e (`subst` body))
+interpretStep (App lam arg) = interpretStep lam >>= \case
+  StepAST lam'   -> pure $ StepAST (App lam' arg)
+  StepValue lam' -> pure $ StepAST (val lam' arg)
+interpretStep (Fix e) = interpretStep e >>= \case
+  StepAST e'   -> pure $ StepAST (Fix e')
+  StepValue e' -> pure $ StepAST $ unfix (ast e') (val e')
+interpretStep (Pair f s) = interpretStep f >>= \case
+  StepAST f' -> pure $ StepAST (Pair f' s)
+  StepValue f' -> interpretStep s >>= \case
+    StepAST s' -> pure $ StepAST (Pair (ast f') s')
+    StepValue s' -> pure $ StepValue $ Value (Pair (ast f') (ast s')) (val f', val s')
+interpretStep (PrimUnaryOp PrimNeg e) = interpretStep e >>= \case
+  StepAST e' -> pure $ StepAST (PrimUnaryOp PrimNeg e')
+  StepValue e' -> let v = negate $ val e' in pure $ StepValue $ Value (IntE v) v
+interpretStep (PrimUnaryOp PrimNot e) = interpretStep e >>= \case
+  StepAST e' -> pure $ StepAST (PrimUnaryOp PrimNot e')
+  StepValue e' -> let v = not $ val e' in pure $ StepValue $ Value (BoolE v) v
+interpretStep (PrimUnaryOp PrimFst e) = interpretStep e >>= \case
+  StepAST e' -> pure $ StepAST (PrimUnaryOp PrimFst e')
+  StepValue (Value (Pair e' _) _) -> pure $ StepAST e'
+  _ -> error "impossible match"
+interpretStep (PrimUnaryOp PrimSnd e) = interpretStep e >>= \case
+  StepAST e' -> pure $ StepAST (PrimUnaryOp PrimSnd e')
+  StepValue (Value (Pair _ e') _) -> pure $ StepAST e'
+  _ -> error "impossible match"
+interpretStep (PrimBinaryOp PrimAdd e1 e2) = interpretStep e1 >>= \case
+  StepAST e1' -> pure $ StepAST (PrimBinaryOp PrimAdd e1' e2)
+  StepValue e1' -> interpretStep e2 >>= \case
+    StepAST e2' -> pure $ StepAST (PrimBinaryOp PrimAdd (ast e1') e2')
+    StepValue e2' -> let v = val e1' + val e2' in pure $ StepValue $ Value (IntE v) v
+interpretStep (PrimBinaryOp PrimSub e1 e2) = interpretStep e1 >>= \case
+  StepAST e1' -> pure $ StepAST (PrimBinaryOp PrimSub e1' e2)
+  StepValue e1' -> interpretStep e2 >>= \case
+    StepAST e2' -> pure $ StepAST (PrimBinaryOp PrimSub (ast e1') e2')
+    StepValue e2' -> let v = val e1' - val e2' in pure $ StepValue $ Value (IntE v) v
+interpretStep (PrimBinaryOp PrimMul e1 e2) = interpretStep e1 >>= \case
+  StepAST e1' -> pure $ StepAST (PrimBinaryOp PrimMul e1' e2)
+  StepValue e1' -> interpretStep e2 >>= \case
+    StepAST e2' -> pure $ StepAST (PrimBinaryOp PrimMul (ast e1') e2')
+    StepValue e2' -> let v = val e1' * val e2' in pure $ StepValue $ Value (IntE v) v
+interpretStep (PrimBinaryOp PrimDiv e1 e2) = interpretStep e1 >>= \case
+  StepAST e1' -> pure $ StepAST (PrimBinaryOp PrimDiv e1' e2)
+  StepValue e1' -> interpretStep e2 >>= \case
+    StepAST e2' -> pure $ StepAST (PrimBinaryOp PrimDiv (ast e1') e2')
+    StepValue e2' -> let v = val e1' `div` val e2' in pure $ StepValue $ Value (IntE v) v
+interpretStep (PrimBinaryOp PrimAnd e1 e2) = interpretStep e1 >>= \case
+  StepAST e1' -> pure $ StepAST (PrimBinaryOp PrimAnd e1' e2)
+  StepValue e1' -> interpretStep e2 >>= \case
+    StepAST e2' -> pure $ StepAST (PrimBinaryOp PrimAnd (ast e1') e2')
+    StepValue e2' -> let v = val e1' && val e2' in pure $ StepValue $ Value (BoolE v) v
+interpretStep (PrimBinaryOp PrimOr e1 e2) = interpretStep e1 >>= \case
+  StepAST e1' -> pure $ StepAST (PrimBinaryOp PrimOr e1' e2)
+  StepValue e1' -> interpretStep e2 >>= \case
+    StepAST e2' -> pure $ StepAST (PrimBinaryOp PrimOr (ast e1') e2')
+    StepValue e2' -> let v = val e1' || val e2' in pure $ StepValue $ Value (BoolE v) v
+interpretStep (PrimBinaryOp PrimLT e1 e2) = interpretStep e1 >>= \case
+  StepAST e1' -> pure $ StepAST (PrimBinaryOp PrimLT e1' e2)
+  StepValue e1' -> interpretStep e2 >>= \case
+    StepAST e2' -> pure $ StepAST (PrimBinaryOp PrimLT (ast e1') e2')
+    StepValue e2' -> let v = val e1' < val e2' in pure $ StepValue $ Value (BoolE v) v
+interpretStep (PrimBinaryOp PrimGT e1 e2) = interpretStep e1 >>= \case
+  StepAST e1' -> pure $ StepAST (PrimBinaryOp PrimGT e1' e2)
+  StepValue e1' -> interpretStep e2 >>= \case
+    StepAST e2' -> pure $ StepAST (PrimBinaryOp PrimGT (ast e1') e2')
+    StepValue e2' -> let v = val e1' > val e2' in pure $ StepValue $ Value (BoolE v) v
+interpretStep (PrimBinaryOp PrimLE e1 e2) = interpretStep e1 >>= \case
+  StepAST e1' -> pure $ StepAST (PrimBinaryOp PrimLE e1' e2)
+  StepValue e1' -> interpretStep e2 >>= \case
+    StepAST e2' -> pure $ StepAST (PrimBinaryOp PrimLE (ast e1') e2')
+    StepValue e2' -> let v = val e1' <= val e2' in pure $ StepValue $ Value (BoolE v) v
+interpretStep (PrimBinaryOp PrimGE e1 e2) = interpretStep e1 >>= \case
+  StepAST e1' -> pure $ StepAST (PrimBinaryOp PrimGE e1' e2)
+  StepValue e1' -> interpretStep e2 >>= \case
+    StepAST e2' -> pure $ StepAST (PrimBinaryOp PrimGE (ast e1') e2')
+    StepValue e2' -> let v = val e1' >= val e2' in pure $ StepValue $ Value (BoolE v) v
+interpretStep (PrimBinaryOp PrimEq e1 e2) = interpretStep e1 >>= \case
+  StepAST e1' -> pure $ StepAST (PrimBinaryOp PrimEq e1' e2)
+  StepValue e1' -> interpretStep e2 >>= \case
+    StepAST e2' -> pure $ StepAST (PrimBinaryOp PrimEq (ast e1') e2')
+    StepValue e2' -> case (ast e1', ast e2') of
+      (IntE n, IntE m) -> let v = n == m in pure $ StepValue $ Value (BoolE v) v
+      (BoolE n, BoolE m) -> let v = n == m in pure $ StepValue $ Value (BoolE v) v
+      (UnitE, UnitE) -> pure $ StepValue $ Value (BoolE True) True
+      -- If we explicitly pattern match on conflicting cases, Haskell recognizes the conflicting constraint
+      -- but we have not found yet, a way to generate an absurd value.
+      _ -> error "impossible match"
+interpretStep (PrimBinaryOp PrimNeq e1 e2) = interpretStep e1 >>= \case
+  StepAST e1' -> pure $ StepAST (PrimBinaryOp PrimNeq e1' e2)
+  StepValue e1' -> interpretStep e2 >>= \case
+    StepAST e2' -> pure $ StepAST (PrimBinaryOp PrimNeq (ast e1') e2')
+    StepValue e2' -> case (ast e1', ast e2') of
+      (IntE n, IntE m) -> let v = n /= m in pure $ StepValue $ Value (BoolE v) v
+      (BoolE n, BoolE m) -> let v = n /= m in pure $ StepValue $ Value (BoolE v) v
+      (UnitE, UnitE) -> pure $ StepValue $ Value (BoolE False) False
       -- If we explicitly pattern match on conflicting cases, Haskell recognizes the conflicting constraint
       -- but we have not found yet, a way to generate an absurd value.
       _ -> error "impossible match"
