@@ -90,7 +90,11 @@ genIR _ tast = do
 genLLVM :: (MonadError LabError m, MonadFix m, MonadIO m) => SLType ty -> AST '[] ty -> m ()
 genLLVM ty tast = do
   m <- wrapper ty $ buildEnv tast
-  liftIO . TL.putStrLn . PP.ppllvm $ m
+  liftIO $ withContext $ \context ->
+    withModuleFromAST context m $ \m' ->
+      withPassManager defaultPassSetSpec $ \_ -> do
+        verify m'
+        moduleLLVMAssembly m' >>= BS.putStrLn
 
 evalAST :: MonadIO m => AST '[] ty -> m ()
 evalAST = renderPretty . prettyAST . ast . eval

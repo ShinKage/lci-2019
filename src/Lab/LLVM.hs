@@ -44,15 +44,21 @@ import Lab.Errors
 
 data EnvState = EnvState { decls :: [Operand]
                          , args :: [Operand]
-                         , lets :: [Operand]
+                         , lets :: [LazyLet]
                          , lastFun :: Int
                          , lastFunOperand :: Maybe Operand
                          , lastFunRet :: AST.Type
+                         , lastFunName :: Name
                          , genBody :: Bool
                          }
 
+data LazyLet = LazyLet { evaluated :: Operand
+                       , valLoc :: Operand
+                       , code :: CodegenAST
+                       }
+
 emptyEnvState :: EnvState
-emptyEnvState = EnvState [] [] [] 0 Nothing LLVM.void False
+emptyEnvState = EnvState [] [] [] 0 Nothing LLVM.void "" False
 
 -- | Wraps the generated code in a single function.
 wrapper :: (MonadFix m, MonadError LabError m) => SLType ty -> CodegenEnv -> m Module
@@ -60,7 +66,7 @@ wrapper ty cenv = buildModuleT "exe" $ flip runStateT emptyEnvState $ do
   decls' <- topLevelFunctions (decl cenv)
   function "expr" [] (labToLLVM $ fromSing ty) $ \[] -> mdo
     _ <- block `named` "entry"
-    modify $ \env -> env { decls = reverse decls', genBody = True }
+    modify $ \env -> env { decls = reverse decls', genBody = True, lastFunName = "expr" }
     e' <- codegen (expr cenv)
     ret e'
 
@@ -80,10 +86,10 @@ topLevelFunctions decls' = forM (reverse decls') $ \dec -> mdo
     let retty = labToLLVM $ retType dec
     name <- getFunName
     f <- function name argTypes retty $ \args' -> do
-      modify $ \env -> env { args = reverse args', lastFunOperand = Just f, lastFunRet = retty, lets = [] }
+      modify $ \env -> env { args = reverse args', lastFunOperand = Just f, lastFunRet = retty, lastFunName = name, lets = [] }
       _ <- block `named` "entry"
       body' <- codegen (body dec)
-      modify $ \env -> env { args = [], lastFunOperand = Nothing, lastFunRet = LLVM.void, lets = [] }
+      modify $ \env -> env { args = [], lastFunOperand = Nothing, lastFunRet = LLVM.void, lastFunName = "", lets = [] }
       ret body'
     ds' <- gets decls
     modify $ \env -> env { decls = ds' ++ [f] }
@@ -115,7 +121,22 @@ codegen (CVar i)                 = varBinding i
 codegen (CPair f s)              = pairStruct f s
 codegen (CLambda _ _ _)          = throwError (CodegenError "Lambda not lifted")
 codegen (CFix _)                 = throwError (CodegenError "Fix not lifted")
-codegen app@(CApp _ _) = do
+codegen app@(CApp _ _)           = appImpl app
+codegen (CCall i)                = callImpl i
+codegen CRecToken                = rekToken
+codegen (CLet e1 e2)             = letImpl e1 e2
+codegen (CLetRef i)              = letRef i
+
+rekToken :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
+         => m Operand
+rekToken = gets lastFunOperand >>= \case
+  Just f -> pure f
+  Nothing -> throwError $ CodegenError "Token can be only placed in recursive functions"
+
+appImpl :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
+        => CodegenAST
+        -> m Operand
+appImpl app = do
   let (f, as) = viewApp app
   f' <- codegen f
   args' <- traverse (fmap (, []) . codegen) as
@@ -131,7 +152,11 @@ codegen app@(CApp _ _) = do
   , AST.metadata = []
   }
   emitInstr retty instr
-codegen (CCall i) = do
+
+callImpl :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
+         => Int
+         -> m Operand
+callImpl i = do
   ds <- gets decls
   gen <- gets genBody
   if gen
@@ -141,19 +166,40 @@ codegen (CCall i) = do
     else case index' (length ds - i) ds of
            Just d -> pure d
            Nothing -> throwError (CodegenError "Function index out of range")
-codegen CRecToken = gets lastFunOperand >>= \case
-  Just f -> pure f
-  Nothing -> throwError (CodegenError "Token can be only placed in recursive functions")
-codegen (CLet e1 e2) = do
-  l <- codegen e1
+
+letImpl :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
+        => CodegenAST
+        -> CodegenAST
+        -> m Operand
+letImpl e1 e2 = do
+  evloc <- alloca i1 (Just $ bit 0) 0x0
+  (vty, _) <- runIRBuilderT emptyIRBuilder $ codegen e1 >>= pure . typeOf
+  valloc <- alloca vty Nothing 0x0
+  let ll = LazyLet evloc valloc e1
   old <- gets lets
-  modify $ \env -> env { lets = old ++ [l] }
+  modify $ \env -> env { lets = old ++ [ll] }
   codegen e2
-codegen (CLetRef i) = do
-  lets' <- gets lets
-  case index' i lets' of
-    Just arg -> pure arg
-    Nothing  -> throwError $ CodegenError "Let index out of range"
+
+letRef :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
+       => Int
+       -> m Operand
+letRef i = index' i <$> gets lets >>= \case
+  Just ll -> mdo
+    ev <- load (evaluated ll) 0x0
+    condBr ev ifThen ifElse
+    ifThen <- block `named` "let.ev"
+    e1' <- load (valLoc ll) 0x0
+    br ifExit
+    thenBlock <- currentBlock
+    ifElse <- block `named` "let.notev"
+    e2' <- codegen (code ll)
+    store (valLoc ll) 0x0 e2'
+    store (evaluated ll) 0x0 (bit 1)
+    br ifExit
+    elseBlock <- currentBlock
+    ifExit <- block `named` "let.exit"
+    phi [(e1', thenBlock), (e2', elseBlock)]
+  Nothing -> throwError $ CodegenError "Let index out of range"
 
 viewApp :: CodegenAST -> (CodegenAST, [CodegenAST])
 viewApp = go []
@@ -217,11 +263,13 @@ conditional c e1 e2 = mdo
   ifThen <- block `named` "if.then"
   e1' <- codegen e1
   br ifExit
+  thenBlock <- currentBlock
   ifElse <- block `named` "if.else"
   e2' <- codegen e2
   br ifExit
+  elseBlock <- currentBlock
   ifExit <- block `named` "if.exit"
-  phi [(e1', ifThen), (e2', ifElse)]
+  phi [(e1', thenBlock), (e2', elseBlock)]
 
 
 unaryOp :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)

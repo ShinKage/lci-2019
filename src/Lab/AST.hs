@@ -78,11 +78,11 @@ prettyAST :: AST '[] ty -> Doc AnsiStyle
 prettyAST = prettyAST' SNil
 
 prettyAST' :: SList env -> AST env ty -> Doc AnsiStyle
-prettyAST' env = flip runReader initPrec . go env
+prettyAST' gamma = flip runReader initPrec . go gamma
   where go :: SList env -> AST env ty -> Reader Prec (Doc AnsiStyle)
-        go env (IntE n) = pure $ annotate bold (pretty n)
-        go env (BoolE b) = pure $ annotate bold (pretty b)
-        go env UnitE = pure $ annotate bold (pretty "unit")
+        go _ (IntE n) = pure $ annotate bold (pretty n)
+        go _ (BoolE b) = pure $ annotate bold (pretty b)
+        go _ UnitE = pure $ annotate bold (pretty "unit")
         go env (PrimUnaryOp op e) = do
           e' <- local (const $ opPrecArg op) $ go env e
           prec <- ask

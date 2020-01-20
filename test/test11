@@ -1,0 +1,5 @@
+(\x:int. if true then (if true then 0 else 100/x) else 100/x) 3
+step
+codegen
+jit
+quit
