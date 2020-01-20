@@ -86,7 +86,7 @@ prettyAST' gamma = flip runReader initPrec . go gamma
         go env (PrimUnaryOp op e) = do
           e' <- local (const $ opPrecArg op) $ go env e
           prec <- ask
-          pure $ maybeParens (prec >= opPrec op) e'
+          pure $ maybeParens (prec >= opPrec op) $ pretty op <> e'
         go env (PrimBinaryOp op e1 e2) = do
           e1' <- local (const $ binOpLeftPrec op) $ go env e1
           e2' <- local (const $ binOpRightPrec op) $ go env e2
