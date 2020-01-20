@@ -88,7 +88,7 @@ prettyAST :: AST '[] ty -> Doc AnsiStyle
 prettyAST = prettyAST' SNil
 
 prettyAST' :: SList env -> AST env ty -> Doc AnsiStyle
-prettyAST' types = flip runReader initPrec . go types
+prettyAST' gamma = flip runReader initPrec . go gamma
   where go :: SList env -> AST env ty -> Reader Prec (Doc AnsiStyle)
         go _ (IntE n) = pure $ annotate bold (pretty n)
         go _ (BoolE b) = pure $ annotate bold (pretty b)
@@ -96,7 +96,7 @@ prettyAST' types = flip runReader initPrec . go types
         go env (PrimUnaryOp op e) = do
           e' <- local (const $ opPrecArg op) $ go env e
           prec <- ask
-          pure $ maybeParens (prec >= opPrec op) e'
+          pure $ maybeParens (prec >= opPrec op) $ pretty op <> e'
         go env (PrimBinaryOp op e1 e2) = do
           e1' <- local (const $ binOpLeftPrec op) $ go env e1
           e2' <- local (const $ binOpRightPrec op) $ go env e2

@@ -95,7 +95,13 @@ parseAtom = try (tokUnit $> UUnitE) <|> choice [ parens parseLanguage
                    ]
 
 reserved :: [String]
-reserved = ["if", "then", "else", "let", "in", "int", "bool", "unit", "true", "false", "void", "pure", "fst", "snd", "IO"]
+reserved = [ "if", "then", "else"
+           , "let", "in"
+           , "int", "bool", "unit", "void"
+           , "true", "false"
+           , "fst", "snd"
+           , "pure", "IO"
+           ]
 
 identifier :: Parser Text
 identifier = pack <$> (lexeme . try) (p >>= check)
