@@ -1,0 +1,5 @@
+(pure 2) >>= (\x:int. (\y:int. pure (x + y) x))
+step
+codegen
+jit
+quit

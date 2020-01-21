@@ -151,6 +151,7 @@ ffiRet (SLProduct a b) k =
   ffiRet b $ \(r2, _ :: FFI.RetType b, f2) -> do
     (r, f) <- FFI.newStructCType [r1, r2]
     k (r, FFI.mkStorableRetType r :: FFI.RetType (a, b), f1 >> f2 >> f)
+ffiRet (SLIO a) k = ffiRet a k
 ffiRet _ _ = error "Not a value"
 
 genASM :: (MonadError LabError m, MonadFix m, MonadIO m) => SLType ty -> AST '[] ty -> m ()

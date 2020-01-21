@@ -77,6 +77,7 @@ labToLLVM LUnit = ptr i8
 labToLLVM (LProduct a b) = StructureType False [labToLLVM a, labToLLVM b]
 labToLLVM (LArrow _ _) = error "Expression must return a value"
 labToLLVM LVoid = error "Void cannot be instantiated"
+labToLLVM (LIO a) = labToLLVM a
 
 topLevelFunctions :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadModuleBuilder m)
                   => [Declaration]
@@ -126,6 +127,9 @@ codegen (CCall i)                = callImpl i
 codegen CRecToken                = rekToken
 codegen (CLet e1 e2)             = letImpl e1 e2
 codegen (CLetRef i)              = letRef i
+codegen (CIOPure e)              = codegen e
+codegen (CIOBind e1 e2)          = codegen (CApp e2 e1)
+codegen (CIOPrimRead t)          = undefined
 
 rekToken :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
          => m Operand

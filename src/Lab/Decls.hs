@@ -76,6 +76,9 @@ data CodegenAST :: Type where
   CRecToken :: CodegenAST
   CLet :: CodegenAST -> CodegenAST -> CodegenAST
   CLetRef :: Int -> CodegenAST
+  CIOPure :: CodegenAST -> CodegenAST
+  CIOBind :: CodegenAST -> CodegenAST -> CodegenAST
+  CIOPrimRead :: LType -> CodegenAST
 
 deriving instance Show CodegenAST
 instance Eq CodegenAST where
@@ -93,6 +96,9 @@ instance Eq CodegenAST where
   (CFix e) == (CFix e') = e == e'
   CRecToken == CRecToken = True
   (CLetRef n) == (CLetRef n') = n == n'
+  (CIOPure e) == (CIOPure e') = e == e'
+  (CIOBind x f) == (CIOBind x' f') = x == x' && f == f'
+  (CIOPrimRead t) == (CIOPrimRead t') = t == t'
   _ == _ = False
 
 instance Hashable CodegenAST where
@@ -121,6 +127,10 @@ instance Hashable CodegenAST where
   hashWithSalt s (CLet lam arg) = s `hashWithSalt` lam
                                     `hashWithSalt` arg
   hashWithSalt s (CLetRef n) = s `hashWithSalt` n
+  hashWithSalt s (CIOPure e) = s `hashWithSalt` e
+  hashWithSalt s (CIOBind x f) = s `hashWithSalt` x
+                                   `hashWithSalt` f
+  hashWithSalt s (CIOPrimRead t) = s `hashWithSalt` t
 
 -- | A top-level function declaration.
 data Declaration = Decl { argsType :: [LType]
@@ -206,6 +216,16 @@ prettyCodegenAST = flip Strict.evalState ((0, 0), initPrec) . go
                     , pretty "in" <+> e2'
                     ]
         go (CLetRef v) = pure $ pretty "#l" <> pretty v
+        go (CIOPure e) = do
+          e' <- Strict.withState (updatePrec initPrec) $ go e
+          prec <- gets snd
+          pure $ maybeParens (prec >= appPrec) $ pretty "pure" <+> e'
+        go (CIOBind e1 e2) = do
+          e1' <- Strict.withState (updatePrec initPrec) $ go e1
+          e2' <- Strict.withState (updatePrec initPrec) $ go e2
+          prec <- gets snd
+          pure $ maybeParens (prec >= initPrec) $ e1' <+> pretty ">>=" <+> e2'
+        go (CIOPrimRead ty) = pure $ pretty "read" <+> pretty ty
 
 
 -- | Conversion from a typed AST to a code generation ready IR.
@@ -222,6 +242,9 @@ fromAST' vars env (Lambda sty e) = let env' = SCons sty env in
                                        CLambda [fromSing sty] (fromSing $ returnType env' e) (fromAST' vars env' e)
 fromAST' vars env (App lam arg) = CApp (fromAST' vars env lam) (fromAST' vars env arg)
 fromAST' vars env (Fix e) = CFix (fromAST' vars env e)
+fromAST' vars env (IOPure e) = CIOPure (fromAST' vars env e)
+fromAST' vars env (IOBind x f) = CIOBind (fromAST' vars env x) (fromAST' vars env f)
+fromAST' _ _ (IOPrimRead t) = CIOPrimRead (fromSing t)
 fromAST' _ _ (IntE n) = CIntE n
 fromAST' _ _ (BoolE b) = CBoolE b
 fromAST' _ _ UnitE = CUnitE
@@ -240,6 +263,8 @@ freeVars' i types (CApp lam arg) = freeVars' i types lam ++ freeVars' i types ar
 freeVars' i types (CLambda argsTy _ e) = freeVars' (i + length argsTy) (argsTy ++ types) e
 freeVars' i types (CFix e) = freeVars' i types e
 freeVars' i types (CLet e1 e2) = freeVars' i types e1 ++ freeVars' i types e2
+freeVars' i types (CIOPure e) = freeVars' i types e
+freeVars' i types (CIOBind e1 e2) = freeVars' i types e1 ++ freeVars' i types e2
 freeVars' _ _ _ = []
 
 -- | Applies the closure conversion transformation to the expression.
@@ -259,6 +284,8 @@ closureConv' (CPair e1 e2) = CPair <$> closureConv' e1 <*> closureConv' e2
 closureConv' (CApp lam arg) = CApp <$> closureConv' lam <*> closureConv' arg
 closureConv' (CFix e) = CFix <$> closureConv' e
 closureConv' (CLet e1 e2) = CLet <$> closureConv' e1 <*> closureConv' e2
+closureConv' (CIOPure e) = CIOPure <$> closureConv' e
+closureConv' (CIOBind e1 e2) = CIOBind <$> closureConv' e1 <*> closureConv' e2
 closureConv' e = pure e
 
 applyTo :: CodegenAST -> [Int] -> CodegenAST
@@ -279,6 +306,8 @@ liftLam (CPair e1 e2) = CPair <$> liftLam e1 <*> liftLam e2
 liftLam (CApp lam arg) = CApp <$> liftLam lam <*> liftLam arg
 liftLam (CFix lam) = liftLam lam
 liftLam (CLet e1 e2) = CLet <$> liftLam e1 <*> liftLam e2
+liftLam (CIOPure e) = CIOPure <$> liftLam e
+liftLam (CIOBind e1 e2) = CIOBind <$> liftLam e1 <*> liftLam e2
 liftLam e = pure e
 
 -- | Joins sequences of lambda abstractions in single multi-parameters lambda
@@ -293,6 +322,8 @@ smash (CPair e1 e2) = CPair (smash e1) (smash e2)
 smash (CApp lam arg) = CApp (smash lam) (smash arg)
 smash (CFix (CLambda vs ret e)) = CFix (CLambda vs ret (smash e))
 smash (CLet e1 e2) = CLet (smash e1) (smash e2)
+smash (CIOPure e) = CIOPure (smash e)
+smash (CIOBind e1 e2) = CIOBind (smash e1) (smash e2)
 smash e = e
 
 -- | Removes explicit fix operator with recursive call tokens ready for codegen.
@@ -317,7 +348,9 @@ unfix' (CFix (CLambda _ _ e)) = do
   (seen, vars) <- ask
   if seen then error "Unsupported nested fixes"
           else local (const (True, vars)) (unfix' e)
-unfix' (CFix _) = error "Unsupported lambda refernce in fix operator"
+unfix' (CFix _) = error "Unsupported lambda reference in fix operator"
+unfix' (CIOPure e) = CIOPure <$> unfix' e
+unfix' (CIOBind e1 e2) = CIOBind <$> unfix' e1 <*> unfix' e2
 unfix' e = pure e
 
 buildEnv :: AST '[] ty -> CodegenEnv
@@ -334,6 +367,7 @@ insertLets = fst . go
         go e@(CIntE _) = (e, Set.empty)
         go e@(CBoolE _) = (e, Set.empty)
         go e@CUnitE = (e, Set.empty)
+        go e@(CIOPrimRead _) = (e, Set.empty)
         go (CPrimUnaryOp op e) = let (e', set) = go e in
                                      update (CPrimUnaryOp op e') [set]
         go (CPrimBinaryOp op e1 e2) = let (e1', set1) = go e1
@@ -354,6 +388,10 @@ insertLets = fst . go
                                 (arg', set2) = go arg in
                                 update (CApp lam' arg') [set1, set2]
         go (CFix e) = let (e', set) = go e in update (CFix e') [set]
+        go (CIOPure e) = let (e', set) = go e in update (CIOPure e') [set]
+        go (CIOBind e1 e2) = let (e1', set1) = go e1
+                                 (e2', set2) = go e2 in
+                                 update (CIOBind e1' e2') [set1, set2]
         go e@CRecToken = (e, Set.empty)
         go (CLet _ _) = error "why lets so early?"
         go (CLetRef _) = error "why lets so early?"
@@ -380,6 +418,8 @@ replaceLets = go Map.empty
         go m (CLambda sty ret e) = CLambda sty ret (go m e)
         go m (CApp lam arg) = CApp (go m lam) (go m arg)
         go m (CFix e) = CFix (go m e)
+        go m (CIOPure e) = CIOPure (go m e)
+        go m (CIOBind e1 e2) = CIOBind (go m e1) (go m e2)
         go _ e = e
 
         addMapping e = insertIfAbsent e 0
@@ -417,6 +457,11 @@ zapLets = fst . go Map.empty
                                  (CPair e1' e2', Set.union used_vars1 used_vars2)
         go m (CFix e) = let (e', used_vars) = go m e in
                             (CFix e', used_vars)
+        go m (CIOPure e) = let (e', used_vars) = go m e in
+                               (CIOPure e', used_vars)
+        go m (CIOBind e1 e2) = let (e1', used_vars1) = go m e1
+                                   (e2', used_vars2) = go m e2 in
+                                   (CIOBind e1' e2', Set.union used_vars1 used_vars2)
         go _ e = (e, Set.empty)
 
 
@@ -433,6 +478,8 @@ shiftRef i (CLambda sty ret e) = CLambda sty ret (shiftRef i e)
 shiftRef i (CApp lam arg) = CApp (shiftRef i lam) (shiftRef i arg)
 shiftRef i (CFix e) = CFix (shiftRef i e)
 shiftRef i (CLet e1 e2) = CLet (shiftRef i e1) (shiftRef i e2)
+shiftRef i (CIOPure e) = CIOPure (shiftRef i e)
+shiftRef i (CIOBind e1 e2) = CIOBind (shiftRef i e1) (shiftRef i e2)
 shiftRef _ e = e
 
 shiftMap :: HashMap CodegenAST Int -> HashMap CodegenAST Int
