@@ -30,8 +30,8 @@ import           Lab.Untyped
 type Parser = Parsec Void Text
 
 parseLanguage :: Parser Untyped
-parseLanguage = choice [ parseLet
-                       , fixpoint
+parseLanguage = choice [ let_
+                       , fix
                        , lambda
                        , makeExprParser parseExpr operatorTable
                        ]
@@ -75,19 +75,82 @@ prefix :: Text -> (Untyped -> Untyped) -> Operator Parser Untyped
 prefix name f = Prefix (f <$ literal name)
 
 cond :: Parser Untyped
-cond = UCond <$> (tokIf *> parseLanguage) <*> (tokThen *> parseLanguage) <*> (tokElse *> parseLanguage)
+cond = UCond <$> (literal "if" *> parseLanguage)
+             <*> (literal "then" *> parseLanguage)
+             <*> (literal "else" *> parseLanguage)
 
 parseExpr :: Parser Untyped
-parseExpr = foldl1 UApp <$> sepBy1 parseAtom spaceConsumer
+parseExpr = foldl1 UApp <$> sepBy1 atom spaceConsumer
 
-parseAtom :: Parser Untyped
-parseAtom = try (tokUnit $> UUnitE) <|> choice [ parens parseLanguage
-                   , UIntE <$> lexeme L.decimal
-                   , UBoolE <$> ((tokTrue $> True) <|> (tokFalse $> False))
-                   , cond
-                   , UVar <$> identifier
-                   , pair
-                   ]
+atom :: Parser Untyped
+atom = try (literal "()" $> UUnitE)
+  <|> choice [ parens parseLanguage
+             , UIntE <$> lexeme L.decimal
+             , UBoolE <$> ((literal "true" $> True) <|> (literal "false" $> False))
+             , cond
+             , UVar <$> identifier
+             , pair
+             ]
+
+identifier :: Parser Text
+identifier = pack <$> (lexeme . try) (p >>= check)
+  where p = (:) <$> letterChar <*> many (alphaNumChar <|> char '_') <?> "variable"
+        check x = if x `elem` reserved
+                     then fail $ "reserved keyword " ++ show x ++ " cannot be an identifier"
+                     else pure x
+
+fix :: Parser Untyped
+fix = UFix <$> (literal "fix" *> parseLanguage)
+
+lambda :: Parser Untyped
+lambda = do
+  literal "\\"
+  args <- sepBy1 annotatedType (literal ",")
+  literal "."
+  body <- parseLanguage
+  pure $ foldr (uncurry ULambda) body args
+
+let_ :: Parser Untyped
+let_ = do
+  literal "let"
+  name <- identifier
+  literal ":"
+  ty <- types
+  literal "="
+  e1 <- parseLanguage
+  literal "in"
+  e2 <- parseLanguage
+  pure $ UApp (ULambda name ty e2) e1
+
+pair :: Parser Untyped
+pair = curly $ UPair <$> parseLanguage <*> (literal "," *> parseLanguage)
+
+types :: Parser (SomeSing LType)
+types = makeExprParser typeExpr [[arrow]]
+
+arrow :: Operator Parser (SomeSing LType)
+arrow = InfixR $ from <$ literal "->"
+  where
+    from (SomeSing ty1) (SomeSing ty2) = toSing $ LArrow (fromSing ty1) (fromSing ty2)
+
+typeExpr :: Parser (SomeSing LType)
+typeExpr = choice [ parens types
+                  , literal "int"  $> toSing LInt
+                  , literal "bool" $> toSing LBool
+                  , literal "unit" $> toSing LUnit
+                  , literal "void" $> toSing LVoid
+                  , pairType
+                  ]
+
+pairType :: Parser (SomeSing LType)
+pairType = curly $ do
+  SomeSing ty1 <- types
+  literal ","
+  SomeSing ty2 <- types
+  pure . toSing $ LProduct (fromSing ty1) (fromSing ty2)
+
+annotatedType :: Parser (Name, SomeSing LType)
+annotatedType = (,) <$> identifier <*> (literal ":" *> types)
 
 reserved :: [String]
 reserved = [ "if", "then", "else"
@@ -96,122 +159,3 @@ reserved = [ "if", "then", "else"
            , "true", "false"
            , "fst", "snd"
            ]
-
-identifier :: Parser Text
-identifier = pack <$> (lexeme . try) (p >>= check)
-  where p = (:) <$> letterChar <*> many (alphaNumChar <|> char '_') <?> "variable"
-        check x = if x `elem` reserved
-                     then fail $ "keyword " ++ show x ++ " cannot be an identifier"
-                     else pure x
-
-types :: Parser (SomeSing LType)
-types = makeExprParser typeExpr [[typeArrow]]
-
-typeArrow :: Operator Parser (SomeSing LType)
-typeArrow = InfixR $ from <$ tokArrow
-  where
-    from (SomeSing ty1) (SomeSing ty2) = toSing (LArrow (fromSing ty1) (fromSing ty2))
-
-typeExpr :: Parser (SomeSing LType)
-typeExpr = choice [ parens types
-                  , tokIntType $> toSing LInt
-                  , tokBoolType $> toSing LBool
-                  , tokUnitType $> toSing LUnit
-                  , tokVoidType $> toSing LVoid
-                  , pairType
-                  ]
-
-pairType :: Parser (SomeSing LType)
-pairType = curly $ do
-  SomeSing l <- types
-  tokComma
-  SomeSing r <- types
-  pure . toSing $ LProduct (fromSing l) (fromSing r)
-
-fixpoint :: Parser Untyped
-fixpoint = UFix <$> (tokFix *> parseLanguage)
-
-lambda :: Parser Untyped
-lambda = do
-  tokLambda
-  args <- sepBy1 annotatedType tokComma
-  tokDot
-  body <- parseLanguage
-  pure $ foldr (\(name, ty) acc -> ULambda name ty acc) body args
-    where annotatedType = (,) <$> identifier <*> (tokColon *> types)
-
-parseLet :: Parser Untyped
-parseLet = do
-  tokLet
-  name <- identifier
-  tokColon
-  ty <- types
-  tokEqual
-  e1 <- parseLanguage
-  tokIn
-  e2 <- parseLanguage
-  pure $ UApp (ULambda name ty e2) e1
-
-pair :: Parser Untyped
-pair = curly $ UPair <$> parseLanguage <*> (tokComma *> parseLanguage)
-
--------------------------------------------------------------------------------
--- * Tokens
--------------------------------------------------------------------------------
-
-tokLambda :: Parser ()
-tokLambda = literal "\\"
-
-tokComma :: Parser ()
-tokComma = literal ","
-
-tokColon :: Parser ()
-tokColon = literal ":"
-
-tokDot :: Parser ()
-tokDot = literal "."
-
-tokIn :: Parser ()
-tokIn = literal "in"
-
-tokEqual :: Parser ()
-tokEqual = literal "="
-
-tokLet :: Parser ()
-tokLet = literal "let"
-
-tokUnit :: Parser ()
-tokUnit = literal "()"
-
-tokTrue :: Parser ()
-tokTrue = literal "true"
-
-tokFalse :: Parser ()
-tokFalse = literal "false"
-
-tokFix :: Parser ()
-tokFix = literal "fix"
-
-tokIntType :: Parser ()
-tokIntType = literal "int"
-
-tokBoolType :: Parser ()
-tokBoolType = literal "bool"
-
-tokUnitType :: Parser ()
-tokUnitType = literal "unit"
-
-tokVoidType :: Parser ()
-tokVoidType = literal "void"
-
-tokArrow :: Parser ()
-tokArrow = literal "->"
-
-tokIf :: Parser ()
-tokIf = literal "if"
-
-tokElse :: Parser ()
-tokElse = literal "else"
-
-tokThen :: Parser ()
-tokThen = literal "then"

@@ -1,9 +1,9 @@
-{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeInType #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE ViewPatterns #-}
 
 -------------------------------------------------------------------------------
 -- |
@@ -36,7 +36,7 @@ import Lab.Utils
 -- well-formed expressions, in particular regarding to typing rules.
 data AST :: [LType] -> LType -> Type where
   -- | An integer literal.
-  IntE  :: Integer -> AST env LInt
+  IntE :: Integer -> AST env LInt
   -- | A boolean literal.
   BoolE :: Bool -> AST env LBool
   -- | Unit literal.
@@ -48,7 +48,7 @@ data AST :: [LType] -> LType -> Type where
   -- | Conditional expressions, all branches must have the same type.
   Cond :: AST env LBool -> AST env ret -> AST env ret -> AST env ret
   -- | Lambda abstraction with explicit argument type.
-  Lambda :: SLType arg -> AST (arg : env) ret -> AST env (LArrow arg ret)
+  Lambda :: Sing arg -> AST (arg : env) ret -> AST env (LArrow arg ret)
   -- | Variable as De Brujin index of the indexed binding list.
   Var :: Elem env ty -> AST env ty
   -- | Lambda application.
@@ -61,25 +61,27 @@ data AST :: [LType] -> LType -> Type where
 deriving instance Show (AST env ty)
 
 -- | Computes the return type of an expression within an environment.
-returnType :: SList env -> AST env ty -> SLType ty
+returnType :: Sing env -> AST env ty -> Sing ty
 returnType _ (IntE _)  = sing
 returnType _ (BoolE _) = sing
 returnType _ UnitE     = sing
 returnType env (PrimUnaryOp op e) = unaryReturnType (returnType env e) op
 returnType env (PrimBinaryOp op e1 e2) = binaryReturnType (returnType env e1) (returnType env e2) op
-returnType env (Cond _ e1 _) = returnType env e1
+returnType env (Cond _ e1 _) = returnType env e1 -- = returnType env e2
 returnType env (Lambda ty body) = SLArrow ty (returnType (SCons ty env) body)
 returnType env (Var e) = index e env
 returnType env (App lam _) = case returnType env lam of SLArrow _ ty -> ty
 returnType env (Fix e) = case returnType env e of SLArrow _ ty -> ty
 returnType env (Pair e1 e2) = SLProduct (returnType env e1) (returnType env e2)
 
+-- | Pretty prints a combinator.
 prettyAST :: AST '[] ty -> Doc AnsiStyle
 prettyAST = prettyAST' SNil
 
-prettyAST' :: SList env -> AST env ty -> Doc AnsiStyle
+-- | Pretty prints a generic expression given a correct typing context.
+prettyAST' :: Sing env -> AST env ty -> Doc AnsiStyle
 prettyAST' gamma = flip runReader initPrec . go gamma
-  where go :: SList env -> AST env ty -> Reader Prec (Doc AnsiStyle)
+  where go :: Sing env -> AST env ty -> Reader Prec (Doc AnsiStyle)
         go _ (IntE n) = pure $ annotate bold (pretty n)
         go _ (BoolE b) = pure $ annotate bold (pretty b)
         go _ UnitE = pure $ annotate bold (pretty "unit")

@@ -19,23 +19,24 @@
 
 module Lab.Untyped where
 
-import Control.Monad.Except
-import Data.Kind
-import Data.List (elemIndex)
-import Data.List.Extra
-import Data.Singletons.Decide
-import Data.Singletons.Prelude hiding (Elem)
-import Data.Singletons.Sigma
-import Data.Text
+import           Control.Monad.Except
+import           Data.Kind
+import           Data.List (elemIndex)
+import           Data.List.Extra
+import           Data.Singletons.Decide
+import           Data.Singletons.Prelude hiding (Elem)
+import           Data.Singletons.Sigma
+import           Data.Text
 
-import Lab.AST
-import Lab.Errors (LabError)
+import           Lab.AST
+import           Lab.Errors (LabError)
 import qualified Lab.Errors as Err
-import Lab.Types
+import           Lab.Types
 
+-- | Type of text symbols.
 type Name = Text
 
--- | Untyped Abstract Syntax Tree used for parsing.
+-- | Untyped Abstract Syntax Tree used for parsing and type checking.
 data Untyped :: Type where
   -- | An integer literal.
   UIntE :: Integer -> Untyped
@@ -91,9 +92,9 @@ typecheck = go SNil []
        -> Untyped
        -> (forall ty. Sing ty -> AST env ty -> m r)
        -> m r
-    go _ _ (UIntE n) k = k sing (IntE n)
+    go _ _ (UIntE n)  k = k sing (IntE n)
     go _ _ (UBoolE b) k = k sing (BoolE b)
-    go _ _ UUnitE k = k sing UnitE
+    go _ _ UUnitE k     = k sing UnitE
 
     go env names (UCond c e1 e2) k =
       go env names c $ \tyc' c' -> case tyc' %~ SLBool of -- Check must be a boolean
@@ -105,7 +106,7 @@ typecheck = go SNil []
             Disproved _ -> throwError $ Err.typeMismatch ty1' ty2' "Cond requires two branches of the same type"
 
     go env names (UVar name) k = case elemIndex name names >>= maybeElem env of
-      Just (ty :&: prf) -> k ty (Var prf)
+      Just (ty :&: idx) -> k ty (Var idx)
       Nothing -> throwError $ Err.undefReference (unpack name)
 
     go env names (ULambda name (SomeSing argTy) body) k =

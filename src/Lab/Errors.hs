@@ -1,3 +1,15 @@
+-------------------------------------------------------------------------------
+-- |
+-- Module      : Lab.Errors
+-- Description : Lab language errors.
+-- Copyright   : (c) Giuseppe Lomurno, 2019
+-- License     : ...
+-- Maintainer  : Giuseppe Lomurno <g.lomurno@studenti.unipi.it>
+-- Stability   : experimental
+-- Portability : non-portable (?)
+--
+-------------------------------------------------------------------------------
+
 module Lab.Errors where
 
 import Data.Singletons

@@ -6,6 +6,7 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeInType #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE ViewPatterns #-}
 
 -------------------------------------------------------------------------------
 -- |
@@ -22,28 +23,29 @@
 
 module Lab.Decls where
 
-import Control.Monad.Writer
-import Control.Monad.State
-import Control.Monad.Reader
+import           Control.Monad.Reader
+import           Control.Monad.State
 import qualified Control.Monad.State.Strict as Strict
-import Data.Bifunctor
-import Data.Kind
-import Data.Hashable
-import Data.HashSet (HashSet)
-import Data.Map.Lazy (Map)
-import qualified Data.Map.Lazy as Map
-import Data.HashMap.Lazy (HashMap)
-import qualified Data.HashSet as Set
+import           Control.Monad.Writer.Strict
+import           Data.Bifunctor
+import           Data.Hashable
+import           Data.HashMap.Lazy (HashMap)
 import qualified Data.HashMap.Lazy as HMap
-import Data.List.Extra
-import Data.Singletons.Prelude (SList, Sing(..), fromSing)
-import Data.Text.Prettyprint.Doc
-import Data.Text.Prettyprint.Doc.Render.Terminal
-import Data.Text.Prettyprint.Doc.Symbols.Unicode
+import           Data.HashSet (HashSet)
+import qualified Data.HashSet as HSet
+import           Data.Kind
+import           Data.List.Extra
+import           Data.Map.Lazy (Map)
+import qualified Data.Map.Lazy as Map
+import           Data.Maybe (fromMaybe)
+import           Data.Singletons.Prelude (Sing(..), fromSing)
+import           Data.Text.Prettyprint.Doc
+import           Data.Text.Prettyprint.Doc.Render.Terminal
+import           Data.Text.Prettyprint.Doc.Symbols.Unicode
 
-import Lab.AST
-import Lab.Types
-import Lab.Utils
+import           Lab.AST
+import           Lab.Types
+import           Lab.Utils
 
 -- | Stripped down version of the Lab AST, with support for top level
 -- function declarations and call mechanism. This IR is not typed and
@@ -74,12 +76,29 @@ data CodegenAST :: Type where
   -- | Fixpoint operator for recursive functions support.
   -- Correctly lifted expression must not contain this constructor.
   CFix :: CodegenAST -> CodegenAST
-  -- Recursion call token, must be present only in top-level declarations.
+  -- | Recursion call token, must be present only in top-level declarations.
   CRecToken :: CodegenAST
+  -- | Lazy expression computation for CSE.
   CLet :: CodegenAST -> CodegenAST -> CodegenAST
+  -- | Reference to a lazy expression computation.
   CLetRef :: Int -> CodegenAST
 
 deriving instance Show CodegenAST
+
+-- | A top-level function declaration.
+data Declaration = Decl { argsType :: [LType]
+                        , retType  :: LType
+                        , body     :: CodegenAST
+                        }
+  deriving (Show)
+
+-- | An environment for code generation with a list of declarations
+-- and the expression to execute.
+data CodegenEnv = Env { decl :: Map Int Declaration
+                      , expr :: CodegenAST
+                      }
+  deriving (Show)
+
 instance Eq CodegenAST where
   (CIntE n) == (CIntE m) = n == m
   (CBoolE b) == (CBoolE v) = b == v
@@ -98,9 +117,9 @@ instance Eq CodegenAST where
   _ == _ = False
 
 instance Hashable CodegenAST where
-  hashWithSalt s (CIntE n) = s `hashWithSalt` n
+  hashWithSalt s (CIntE n)  = s `hashWithSalt` n
   hashWithSalt s (CBoolE b) = s `hashWithSalt` b
-  hashWithSalt s CUnitE = s `hashWithSalt` ()
+  hashWithSalt s CUnitE     = s `hashWithSalt` ()
   hashWithSalt s (CPrimUnaryOp op e) = s `hashWithSalt` op
                                          `hashWithSalt` e
   hashWithSalt s (CPrimBinaryOp op e1 e2) = s `hashWithSalt` op
@@ -124,20 +143,7 @@ instance Hashable CodegenAST where
                                     `hashWithSalt` arg
   hashWithSalt s (CLetRef n) = s `hashWithSalt` n
 
--- | A top-level function declaration.
-data Declaration = Decl { argsType :: [LType]
-                        , retType :: LType
-                        , body :: CodegenAST
-                        }
-  deriving (Show)
-
--- | An environment for code generation with a list of declarations
--- and the expression to execute.
-data CodegenEnv = Env { decl :: Map Int Declaration
-                      , expr :: CodegenAST
-                      }
-  deriving (Show)
-
+-- | Pretty printing a code generation ready AST.
 prettyCodegenAST :: CodegenAST -> Doc AnsiStyle
 prettyCodegenAST = flip Strict.evalState ((0, 0), initPrec) . go
   where updatePrec :: Prec -> ((Int, Int), Prec) -> ((Int, Int), Prec)
@@ -209,24 +215,23 @@ prettyCodegenAST = flip Strict.evalState ((0, 0), initPrec) . go
                     ]
         go (CLetRef v) = pure $ pretty "#l" <> pretty v
 
-
 -- | Conversion from a typed AST to a code generation ready IR.
-fromAST :: SList env -> AST env ty -> CodegenAST
+fromAST :: Sing env -> AST env ty -> CodegenAST
 fromAST = fromAST' 0
 
-fromAST' :: Int -> SList env -> AST env ty -> CodegenAST
+fromAST' :: Int -> Sing env -> AST env ty -> CodegenAST
+fromAST' _ _ (IntE n)  = CIntE n
+fromAST' _ _ (BoolE b) = CBoolE b
+fromAST' _ _ UnitE     = CUnitE
+fromAST' _ _ (Var (elemToIntegral -> v)) = CVar v
 fromAST' vars env (PrimUnaryOp op e) = CPrimUnaryOp op (fromAST' vars env e)
 fromAST' vars env (PrimBinaryOp op e1 e2) = CPrimBinaryOp op (fromAST' vars env e1) (fromAST' vars env e2)
 fromAST' vars env (Cond c e1 e2) = CCond (fromAST' vars env c) (fromAST' vars env e1) (fromAST' vars env e2)
-fromAST' _ _ (Var e) = CVar (elemToIntegral e)
 fromAST' vars env (Pair e1 e2) = CPair (fromAST' vars env e1) (fromAST' vars env e2)
 fromAST' vars env (Lambda sty e) = let env' = SCons sty env in
                                        CLambda [fromSing sty] (fromSing $ returnType env' e) (fromAST' vars env' e)
 fromAST' vars env (App lam arg) = CApp (fromAST' vars env lam) (fromAST' vars env arg)
 fromAST' vars env (Fix e) = CFix (fromAST' vars env e)
-fromAST' _ _ (IntE n) = CIntE n
-fromAST' _ _ (BoolE b) = CBoolE b
-fromAST' _ _ UnitE = CUnitE
 
 -- | Returns the list of free variable used in the expression.
 freeVars :: CodegenAST -> [(LType, Int)]
@@ -236,7 +241,8 @@ freeVars' :: Int -> [LType] -> CodegenAST -> [(LType, Int)]
 freeVars' i types (CPrimBinaryOp _ e1 e2) = freeVars' i types e1 ++ freeVars' i types e2
 freeVars' i types (CPrimUnaryOp _ e) = freeVars' i types e
 freeVars' i types (CCond c e1 e2) = freeVars' i types c ++ freeVars' i types e1 ++ freeVars' i types e2
-freeVars' i types (CVar v) = [(types !! v, v - i) | v >= i]
+freeVars' i types (CVar v) = [(types !! v, v - i) | v >= i] -- types is the list of abstraction arguments discovered during descent.
+                                                            -- a variable is free if it is outside the range of types that is passed as the arg i.
 freeVars' i types (CPair e1 e2) = freeVars' i types e1 ++ freeVars' i types e2
 freeVars' i types (CApp lam arg) = freeVars' i types lam ++ freeVars' i types arg
 freeVars' i types (CLambda argsTy _ e) = freeVars' (i + length argsTy) (argsTy ++ types) e
@@ -253,7 +259,7 @@ closureConv' lam@(CLambda vs ret e) = do
   e' <- local (vs ++) (closureConv' e)
   types <- ask
   let vars = freeVars' 0 types lam
-  pure $ CLambda (map fst vars ++ vs) ret e' `applyTo` map snd vars
+  pure $ CLambda (fmap fst vars ++ vs) ret e' `applyTo` map snd vars
 closureConv' (CPrimUnaryOp op e) = CPrimUnaryOp op <$> closureConv' e
 closureConv' (CPrimBinaryOp op e1 e2) = CPrimBinaryOp op <$> closureConv' e1 <*> closureConv' e2
 closureConv' (CCond c e1 e2) = CCond <$> closureConv' c <*> closureConv' e1 <*> closureConv' e2
@@ -283,8 +289,8 @@ liftLam (CFix lam) = liftLam lam
 liftLam (CLet e1 e2) = CLet <$> liftLam e1 <*> liftLam e2
 liftLam e = pure e
 
--- | Joins sequences of lambda abstractions in single multi-parameters lambda
--- abstractions.
+-- | Joins sequences of lambda abstractions in a single multi-parameter lambda
+-- abstraction.
 smash :: CodegenAST -> CodegenAST
 smash (CLambda vs _ (CLambda vs' ret' e)) = smash (CLambda (vs ++ vs') ret' e)
 smash (CLambda vs ret e) = CLambda vs ret (smash e)
@@ -299,6 +305,8 @@ smash (CFix e) = CFix (smash e)
 smash e = e
 
 -- | Removes explicit fix operator with recursive call tokens ready for codegen.
+-- Assumes that the next expression in the tree after the fixpoint operator is
+-- a lambda abstraction (currently this is enforced by the type checker).
 unfix :: CodegenAST -> CodegenAST
 unfix = flip runReader (False, 0) . unfix'
 
@@ -323,20 +331,25 @@ unfix' (CFix (CLambda _ _ e)) = do
 unfix' (CFix _) = error "Unsupported lambda reference in fix operator"
 unfix' e = pure e
 
+-- | Builds a code generation ready environment from a combinator with the final expression
+-- and a list of lifted lambda abstractions, all with performed CSE.
 buildEnv :: AST '[] ty -> CodegenEnv
 buildEnv ast = let (code, ds) = flip evalState 0 . runWriterT . liftLam . closureConv . unfix . smash $ fromAST SNil ast
                    ds' = fmap (\d -> d { body = cse (body d) }) ds in
                    Env ds' (cse code)
 
+-- | Performes Common Subexpression Elimination.
 cse :: CodegenAST -> CodegenAST
 cse = zapLets . replaceLets . insertLets
 
+-- | Descend in the AST accumulating a set of subexpression, when ascending
+-- if a subexpression was already seen, inserts a lazy let.
 insertLets :: CodegenAST -> CodegenAST
 insertLets = fst . go
   where go :: CodegenAST -> (CodegenAST, HashSet CodegenAST)
-        go e@(CIntE _) = (e, Set.empty)
-        go e@(CBoolE _) = (e, Set.empty)
-        go e@CUnitE = (e, Set.empty)
+        go e@(CIntE _) = (e, HSet.empty)
+        go e@(CBoolE _) = (e, HSet.empty)
+        go e@CUnitE = (e, HSet.empty)
         go (CPrimUnaryOp op e) = let (e', set) = go e in
                                      update (CPrimUnaryOp op e') [set]
         go (CPrimBinaryOp op e1 e2) = let (e1', set1) = go e1
@@ -346,29 +359,32 @@ insertLets = fst . go
                                  (e1', set2) = go e1
                                  (e2', set3) = go e2 in
                                  update (CCond c' e1' e2') [set1, set2, set3]
-        go e@(CVar _) = (e, Set.empty)
+        go e@(CVar _) = (e, HSet.empty)
         go (CPair e1 e2) = let (e1', set1) = go e1
                                (e2', set2) = go e2 in
                                update (CPair e1' e2') [set1, set2]
-        go e@(CCall _) = (e, Set.empty)
+        go e@(CCall _) = (e, HSet.empty)
         go (CLambda arg ret e) = let (e', set) = go e in
                                      update (CLambda arg ret e') [set]
         go (CApp lam arg) = let (lam', set1) = go lam
                                 (arg', set2) = go arg in
                                 update (CApp lam' arg') [set1, set2]
         go (CFix e) = let (e', set) = go e in update (CFix e') [set]
-        go e@CRecToken = (e, Set.empty)
+        go e@CRecToken = (e, HSet.empty)
         go (CLet _ _) = error "why lets so early?"
         go (CLetRef _) = error "why lets so early?"
 
+        -- | Updates a list of sets with a new subexpression and joins them.
         update :: CodegenAST -> [HashSet CodegenAST] -> (CodegenAST, HashSet CodegenAST)
-        update e all_exprss = (mkLets common_exprs e, Set.insert e all_exprs)
+        update e all_exprss = (mkLets common_exprs e, HSet.insert e all_exprs)
           where
             pairs = allPairs all_exprss
-            inters = map (uncurry Set.intersection) pairs
-            common_exprs = Set.toList (Set.unions inters)
-            all_exprs = Set.unions all_exprss
+            inters = map (uncurry HSet.intersection) pairs
+            common_exprs = HSet.toList (HSet.unions inters)
+            all_exprs = HSet.unions all_exprss
 
+-- | Replaces common subexpressions that have been lifted to lazy lets with a reference to
+-- the their proper let.
 replaceLets :: CodegenAST -> CodegenAST
 replaceLets = go HMap.empty
   where go :: HashMap CodegenAST Int -> CodegenAST -> CodegenAST
@@ -387,6 +403,8 @@ replaceLets = go HMap.empty
 
         addMapping e = insertIfAbsent e 0
 
+-- | During the insert and replace process multiple lets with the same subexpression
+-- could have been added. This function leaves only the topmost level lazy let.
 zapLets :: CodegenAST -> CodegenAST
 zapLets = fst . go HMap.empty
   where go :: HashMap Int Int -> CodegenAST -> (CodegenAST, HashSet Int)
@@ -396,31 +414,31 @@ zapLets = fst . go HMap.empty
                           | otherwise = let (e1', used_vars1) = go m e1
                                             (e2', used_vars2) = go (shiftRefMap m) e2
                                             used_vars2' = shiftSet (-1) used_vars2 in
-                                            if Set.member 0 used_vars2
-                                               then (CLet e1' e2', Set.unions [used_vars1, used_vars2'])
+                                            if HSet.member 0 used_vars2
+                                               then (CLet e1' e2', HSet.unions [used_vars1, used_vars2'])
                                                else (shiftRef (-1) e2', used_vars2')
-        go m e@(CLetRef v) | Just v' <- HMap.lookup v m = (CLetRef v', Set.singleton v')
-                           | otherwise = (e, Set.singleton v)
+        go m e@(CLetRef v) | Just v' <- HMap.lookup v m = (CLetRef v', HSet.singleton v')
+                           | otherwise = (e, HSet.singleton v)
         go m (CLambda sty ret e) = let (e', used_vars) = go m e in
                                        (CLambda sty ret e', used_vars)
         go m (CApp e1 e2) = let (e1', used_vars1) = go m e1
                                 (e2', used_vars2) = go m e2 in
-                                (CApp e1' e2', Set.union used_vars1 used_vars2)
+                                (CApp e1' e2', HSet.union used_vars1 used_vars2)
         go m (CPrimUnaryOp op e) = let (e', used_vars) = go m e in
                                        (CPrimUnaryOp op e', used_vars)
         go m (CPrimBinaryOp op e1 e2) = let (e1', used_vars1) = go m e1
                                             (e2', used_vars2) = go m e2 in
-                                            (CPrimBinaryOp op e1' e2', Set.union used_vars1 used_vars2)
+                                            (CPrimBinaryOp op e1' e2', HSet.union used_vars1 used_vars2)
         go m (CCond c e1 e2) = let (c', used_vars1) = go m c
                                    (e1', used_vars2) = go m e1
                                    (e2', used_vars3) = go m e2 in
-                                   (CCond c' e1' e2', Set.unions [used_vars1, used_vars2, used_vars3])
+                                   (CCond c' e1' e2', HSet.unions [used_vars1, used_vars2, used_vars3])
         go m (CPair e1 e2) = let (e1', used_vars1) = go m e1
                                  (e2', used_vars2) = go m e2 in
-                                 (CPair e1' e2', Set.union used_vars1 used_vars2)
+                                 (CPair e1' e2', HSet.union used_vars1 used_vars2)
         go m (CFix e) = let (e', used_vars) = go m e in
                             (CFix e', used_vars)
-        go _ e = (e, Set.empty)
+        go _ e = (e, HSet.empty)
 
 
 mkLets :: [CodegenAST] -> CodegenAST -> CodegenAST
@@ -447,8 +465,7 @@ shiftRefMap = HMap.foldrWithKey go HMap.empty
   where go e el = HMap.insert (e + 1) (el + 1)
 
 shiftSet :: Int -> HashSet Int -> HashSet Int
-shiftSet i = Set.map (+ i)
+shiftSet i = HSet.map (+ i)
 
 insertIfAbsent :: (Eq k, Hashable k) => k -> v -> HashMap k v -> HashMap k v
-insertIfAbsent k v = HMap.alter (\case Just v' -> Just v'
-                                       Nothing -> Just v) k
+insertIfAbsent k v = HMap.alter (Just . fromMaybe v) k

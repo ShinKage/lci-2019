@@ -1,10 +1,10 @@
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeInType #-}
 
 -------------------------------------------------------------------------------
@@ -22,36 +22,32 @@
 module Lab.LLVM where
 
 import Prelude hiding (EQ, and, or)
-import Data.String
-import Data.Map.Lazy (Map)
-import qualified Data.Map.Lazy as Map
-import Control.Monad.State
-import Control.Monad.Except
-import Data.Singletons
-import LLVM.AST (Module)
-import LLVM.AST.Constant as LLVM
-import LLVM.AST.Name as LLVM
-import LLVM.AST.Operand (Operand(..))
-import LLVM.AST.IntegerPredicate as LLVM
-import LLVM.AST.Type as LLVM
-import LLVM.AST.Typed as LLVM
-import LLVM.IRBuilder as LLVM
 
+import           Control.Monad.Except
+import           Control.Monad.State
+import           Data.Map.Lazy (Map)
+import qualified Data.Map.Lazy as Map
+import           Data.Singletons
+import           Data.String
+import           LLVM.AST (Module)
 import qualified LLVM.AST as AST
 import qualified LLVM.AST.CallingConvention as CC
+import           LLVM.AST.Constant as LLVM
+import           LLVM.AST.IntegerPredicate as LLVM
+import           LLVM.AST.Operand (Operand(..))
+import           LLVM.AST.Type as LLVM
+import           LLVM.AST.Typed as LLVM
+import           LLVM.IRBuilder as LLVM
 
-import Lab.Decls
-import Lab.Types
-import Lab.Errors
+import           Lab.Decls
+import           Lab.Errors
+import           Lab.Types
 
 data EnvState = EnvState { decls :: Map Int Operand
                          , args :: [Operand]
                          , lets :: [LazyLet]
-                         , lastFun :: Int
                          , lastFunOperand :: Maybe Operand
                          , lastFunRet :: AST.Type
-                         , lastFunName :: Name
-                         , genBody :: Bool
                          }
 
 data LazyLet = LazyLet { evaluated :: Operand
@@ -60,26 +56,18 @@ data LazyLet = LazyLet { evaluated :: Operand
                        }
 
 emptyEnvState :: EnvState
-emptyEnvState = EnvState Map.empty [] [] 0 Nothing LLVM.void "" False
+emptyEnvState = EnvState Map.empty [] [] Nothing LLVM.void
 
--- | Wraps the generated code in a single function.
+-- | Wraps the generated code in a single function with lifted lambdas.
 wrapper :: (MonadFix m, MonadError LabError m) => SLType ty -> CodegenEnv -> m Module
 wrapper ty cenv = buildModuleT "exe" $ flip runStateT emptyEnvState $ do
   topLevelFunctions (decl cenv)
-  function "expr" [] (labToLLVM $ fromSing ty) $ \[] -> mdo
+  function "lab_main" [] (labToLLVM $ fromSing ty) $ \[] -> mdo
     _ <- block `named` "entry"
-    modify $ \env -> env { genBody = True, lastFunName = "expr" }
-    e' <- codegen (expr cenv)
+    e' <- codegen $ expr cenv
     ret e'
 
-labToLLVM :: LType -> Type
-labToLLVM LInt  = i32
-labToLLVM LBool = i1
-labToLLVM LUnit = ptr i8
-labToLLVM (LProduct a b) = StructureType False [labToLLVM a, labToLLVM b]
-labToLLVM (LArrow a b) = ptr $ FunctionType (labToLLVM b) [labToLLVM a] False
-labToLLVM LVoid = error "Void cannot be instantiated"
-
+-- | Generate the code for lifted lambda abstractions.
 topLevelFunctions :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadModuleBuilder m)
                   => Map Int Declaration
                   -> m ()
@@ -88,23 +76,16 @@ topLevelFunctions decls' = forM_ (Map.toDescList decls') $ \(idx, dec) -> mdo
     let retty = labToLLVM $ retType dec
     let name = fromString $ "fun_" ++ show idx
     f <- function name argTypes retty $ \args' -> do
-      modify $ \env -> env { args = reverse args', lastFunOperand = Just f, lastFunRet = retty, lastFunName = name, lets = [] }
+      modify $ \env -> env { args = reverse args', lastFunOperand = Just f, lastFunRet = retty, lets = [] }
       _ <- block `named` "entry"
       body' <- codegen (body dec)
-      modify $ \env -> env { args = [], lastFunOperand = Nothing, lastFunRet = LLVM.void, lastFunName = "", lets = [] }
+      modify $ \env -> env { args = [], lastFunOperand = Nothing, lastFunRet = LLVM.void, lets = [] }
       ret body'
     ds' <- gets decls
     modify $ \env -> env { decls = Map.insert idx f ds' }
     pure f
-
   where argName :: Int -> ParameterName
         argName i = fromString $ "arg_" ++ show i
-
-        getFunName :: MonadState EnvState m => m Name
-        getFunName = do i <- gets lastFun
-                        let name = fromString $ "fun_" ++ show i
-                        modify $ \env -> env { lastFun = i + 1 }
-                        pure name
 
         getArgTypes :: [LType] -> [(Type, ParameterName)]
         getArgTypes = zipWith (\i arg -> (labToLLVM arg, argName i)) [0..]
@@ -121,17 +102,17 @@ codegen (CPrimBinaryOp op e1 e2) = binaryOp op e1 e2
 codegen (CCond c e1 e2)          = conditional c e1 e2
 codegen (CVar i)                 = varBinding i
 codegen (CPair f s)              = pairStruct f s
-codegen (CLambda _ _ _)          = throwError (CodegenError "Lambda not lifted")
-codegen (CFix _)                 = throwError (CodegenError "Fix not lifted")
+codegen (CLambda _ _ _)          = throwError $ CodegenError "Lambda not lifted"
+codegen (CFix _)                 = throwError $ CodegenError "Fix not lifted"
 codegen app@(CApp _ _)           = appImpl app
 codegen (CCall i)                = callImpl i
-codegen CRecToken                = rekToken
+codegen CRecToken                = recToken
 codegen (CLet e1 e2)             = letImpl e1 e2
 codegen (CLetRef i)              = letRef i
 
-rekToken :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
+recToken :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
          => m Operand
-rekToken = gets lastFunOperand >>= \case
+recToken = gets lastFunOperand >>= \case
   Just f -> pure f
   Nothing -> throwError $ CodegenError "Token can be only placed in recursive functions"
 
@@ -160,15 +141,9 @@ callImpl :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBu
          -> m Operand
 callImpl i = do
   ds <- gets decls
-  gen <- gets genBody
-  -- if gen
-  --  then case lookup i ds of
   case Map.lookup i ds of
            Just d -> pure d
            Nothing -> throwError (CodegenError "Function index out of range")
-  --   else case lookup (length ds - i) ds of
-  --          Just d -> pure d
-  --          Nothing -> throwError (CodegenError "Function index out of range")
 
 letImpl :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
         => CodegenAST
@@ -176,7 +151,7 @@ letImpl :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBui
         -> m Operand
 letImpl e1 e2 = do
   evloc <- alloca i1 (Just $ bit 0) 0x0
-  (vty, _) <- runIRBuilderT emptyIRBuilder $ (typeOf <$> codegen e1)
+  (vty, _) <- runIRBuilderT emptyIRBuilder $ typeOf <$> codegen e1
   valloc <- alloca vty Nothing 0x0
   let ll = LazyLet evloc valloc e1
   old <- gets lets
@@ -227,17 +202,17 @@ funCall i params = do
   ds <- gets decls
   params' <- traverse (fmap (, []) . codegen) params
   case Map.lookup i ds of
-    Just d -> call d params'
+    Just d  -> call d params'
     Nothing -> throwError $ CodegenError "Function index out of range"
 
 litInt :: MonadIRBuilder m => Integer -> m Operand
-litInt n = pure $ int32 n
+litInt = pure . int32
 
 litBool :: MonadIRBuilder m => Bool -> m Operand
-litBool b = pure $ bit $ if b then 1 else 0
+litBool b = pure . bit $ if b then 1 else 0
 
 litUnit :: MonadIRBuilder m => m Operand
-litUnit = pure $ ConstantOperand (Null (ptr i8))
+litUnit = pure . ConstantOperand . Null $ ptr i8
 
 pairStruct :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
            => CodegenAST
@@ -269,7 +244,6 @@ conditional c e1 e2 = mdo
   ifExit <- block `named` "if.exit"
   phi [(e1', thenBlock), (e2', elseBlock)]
 
-
 unaryOp :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
         => UnaryOp arg ret
         -> CodegenAST
@@ -278,7 +252,7 @@ unaryOp op e = do
   e' <- codegen e
   case op of
     PrimNeg -> sub (int32 0) e'
-    PrimNot -> xor e' (bit 0x1)
+    PrimNot -> xor e' (bit 0x1) -- X XOR 1 <=> NOT X
     PrimFst -> extractValue e' [0]
     PrimSnd -> extractValue e' [1]
 
@@ -303,6 +277,15 @@ binaryOp op e1 e2 = do
     PrimNeq -> icmp NE e1' e2'
     PrimAnd -> and e1' e2'
     PrimOr  -> or e1' e2'
+
+-- | Converts Lab types to the corresponding LLVM types.
+labToLLVM :: LType -> Type
+labToLLVM LInt  = i32
+labToLLVM LBool = i1
+labToLLVM LUnit = ptr i8
+labToLLVM (LProduct a b) = StructureType False [labToLLVM a, labToLLVM b]
+labToLLVM (LArrow a b) = ptr $ FunctionType (labToLLVM b) [labToLLVM a] False
+labToLLVM LVoid = error "Void cannot be instantiated"
 
 index' :: Int -> [a] -> Maybe a
 index' _ [] = Nothing

@@ -1,15 +1,28 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
+-------------------------------------------------------------------------------
+-- |
+-- Module      : Lab.Monad
+-- Description : Monad for code generation and REPL.
+-- Copyright   : (c) Giuseppe Lomurno, 2019
+-- License     : ...
+-- Maintainer  : Giuseppe Lomurno <g.lomurno@studenti.unipi.it>
+-- Stability   : experimental
+-- Portability : non-portable (?)
+--
+-------------------------------------------------------------------------------
+
 module Lab.Monad where
 
+import Control.Monad.Except
 import Data.Text.Prettyprint.Doc
 import Data.Text.Prettyprint.Doc.Render.Terminal
-import Control.Monad.Except
 import System.Console.Haskeline
 import System.IO (stdout)
 
 import Lab.Errors
 
+-- | Lab management monad for REPL input and errors.
 newtype Lab a = Lab { unLab :: ExceptT LabError (InputT IO) a}
   deriving (Monad, Functor, Applicative, MonadIO, MonadError LabError, MonadFix)
 
@@ -25,5 +38,5 @@ renderPretty = liftIO . renderIO stdout . layoutSmart defaultLayoutOptions . (<>
 renderString :: (Show a, MonadIO m) => a -> m ()
 renderString = liftIO . print
 
-runLab :: Lab a -> InputT IO (Either LabError a)
-runLab = runExceptT . unLab
+runLab :: Lab a -> IO (Either LabError a)
+runLab = runInputT defaultSettings . runExceptT . unLab

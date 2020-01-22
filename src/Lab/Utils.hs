@@ -71,6 +71,6 @@ colorVar i = annotate (color $ colors !! i)
         colors = cycle [Red, Green, Yellow, Blue, Magenta, Cyan]
 
 allPairs :: [a] -> [(a, a)]
-allPairs [] = []
+allPairs []  = []
 allPairs [_] = []
 allPairs (x : xs) = map (x,) xs ++ allPairs xs
