@@ -18,6 +18,8 @@ data LabError
   | PairRequired (SomeSing LType) String
   -- | Parsing error, name reference is undefined.
   | UndefinedReference String
+  -- | Unsupported expression in Fix operator.
+  | UnsupportedFix String
   -- | Generic parsing error.
   | ParseError String
   -- | Generic code generation error.
@@ -51,6 +53,7 @@ prettyError (UndefinedReference name) =
   pretty "The name" <+> dquotes (annotate (color Red) (pretty name)) <+> pretty "is undefined in this context"
 prettyError (ParseError msg) = pretty msg
 prettyError (CodegenError msg) = pretty msg
+prettyError (UnsupportedFix msg) = pretty msg
 
 expectedType :: SLType t1 -> SLType t2 -> String -> LabError
 expectedType st1 st2 = ExpectedType (SomeSing st1) (SomeSing st2)
@@ -69,3 +72,6 @@ undefReference = UndefinedReference
 
 parseError :: String -> LabError
 parseError = ParseError
+
+unsupportedFix :: String -> LabError
+unsupportedFix = UnsupportedFix

@@ -31,6 +31,7 @@ import Lab.Errors ( LabError
                   , prettyError
                   , typeMismatch
                   , undefReference
+                  , unsupportedFix
                   )
 
 import Lab.Eval ( Step(..)

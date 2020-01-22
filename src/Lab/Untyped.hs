@@ -123,7 +123,9 @@ typecheck = go SNil []
     go env names (UFix lam) k =
       go env names lam $ \lamTy body -> case lamTy of
         SLArrow argTy retTy -> case argTy %~ retTy of -- Fixpoint requires a lambda with matching argument and return type
-          Proved Refl -> k retTy (Fix body)
+          Proved Refl -> case body of
+            Lambda _ _ -> k retTy (Fix body)
+            _ -> throwError $ Err.unsupportedFix "Fixpoint operator requires directly the recursive lambda abstraction"
           Disproved _ -> throwError $ Err.expectedType retTy argTy "Fixpoint operator requires a lambda with same argument and return type"
         _ -> throwError $ Err.lambdaRequired lamTy "Fixpoint operator requires a lambda abstraction"
 
