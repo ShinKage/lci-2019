@@ -30,11 +30,13 @@ import Data.Bifunctor
 import Data.Kind
 import Data.Hashable
 import Data.HashSet (HashSet)
+import Data.Map.Lazy (Map)
+import qualified Data.Map.Lazy as Map
 import Data.HashMap.Lazy (HashMap)
 import qualified Data.HashSet as Set
-import qualified Data.HashMap.Lazy as Map
+import qualified Data.HashMap.Lazy as HMap
 import Data.List.Extra
-import Data.Singletons.Prelude
+import Data.Singletons.Prelude (SList, Sing(..), fromSing)
 import Data.Text.Prettyprint.Doc
 import Data.Text.Prettyprint.Doc.Render.Terminal
 import Data.Text.Prettyprint.Doc.Symbols.Unicode
@@ -131,7 +133,7 @@ data Declaration = Decl { argsType :: [LType]
 
 -- | An environment for code generation with a list of declarations
 -- and the expression to execute.
-data CodegenEnv = Env { decl :: [Declaration]
+data CodegenEnv = Env { decl :: Map Int Declaration
                       , expr :: CodegenAST
                       }
   deriving (Show)
@@ -265,12 +267,12 @@ applyTo :: CodegenAST -> [Int] -> CodegenAST
 applyTo = foldl (\e a -> CApp e $ CVar a)
 
 -- | Applies the lambda lifting transformation to the expression.
-liftLam :: CodegenAST -> WriterT [Declaration] (State Int) CodegenAST
+liftLam :: CodegenAST -> WriterT (Map Int Declaration) (State Int) CodegenAST
 liftLam (CLambda vs ret e) = do
   fresh <- get
   put $ fresh + 1
   e' <- liftLam e
-  tell $ pure $ Decl vs ret e'
+  tell $ Map.singleton fresh $ Decl vs ret e'
   pure $ CCall fresh
 liftLam (CPrimUnaryOp op e) = CPrimUnaryOp op <$> liftLam e
 liftLam (CPrimBinaryOp op e1 e2) = CPrimBinaryOp op <$> liftLam e1 <*> liftLam e2
@@ -293,6 +295,7 @@ smash (CPair e1 e2) = CPair (smash e1) (smash e2)
 smash (CApp lam arg) = CApp (smash lam) (smash arg)
 smash (CFix (CLambda vs ret e)) = CFix (CLambda vs ret (smash e))
 smash (CLet e1 e2) = CLet (smash e1) (smash e2)
+smash (CFix e) = CFix (smash e)
 smash e = e
 
 -- | Removes explicit fix operator with recursive call tokens ready for codegen.
@@ -317,13 +320,13 @@ unfix' (CFix (CLambda _ _ e)) = do
   (seen, vars) <- ask
   if seen then error "Unsupported nested fixes"
           else local (const (True, vars)) (unfix' e)
-unfix' (CFix _) = error "Unsupported lambda refernce in fix operator"
+unfix' (CFix _) = error "Unsupported lambda reference in fix operator"
 unfix' e = pure e
 
 buildEnv :: AST '[] ty -> CodegenEnv
 buildEnv ast = let (code, ds) = flip evalState 0 . runWriterT . liftLam . closureConv . unfix . smash $ fromAST SNil ast
-                   ds' = map (\d -> d { body = cse (body d) }) ds in
-                   Env (reverse ds') (cse code)
+                   ds' = fmap (\d -> d { body = cse (body d) }) ds in
+                   Env ds' (cse code)
 
 cse :: CodegenAST -> CodegenAST
 cse = zapLets . replaceLets . insertLets
@@ -367,9 +370,9 @@ insertLets = fst . go
             all_exprs = Set.unions all_exprss
 
 replaceLets :: CodegenAST -> CodegenAST
-replaceLets = go Map.empty
+replaceLets = go HMap.empty
   where go :: HashMap CodegenAST Int -> CodegenAST -> CodegenAST
-        go m e | Just v <- Map.lookup e m = CLetRef v
+        go m e | Just v <- HMap.lookup e m = CLetRef v
         go m (CLet e1 e2) = let e1' = go m e1
                                 m' = addMapping (shiftRef 1 e1) $ addMapping (shiftRef 1 e1') (shiftMap m) in
                                 CLet e1' (go m' e2)
@@ -385,9 +388,9 @@ replaceLets = go Map.empty
         addMapping e = insertIfAbsent e 0
 
 zapLets :: CodegenAST -> CodegenAST
-zapLets = fst . go Map.empty
+zapLets = fst . go HMap.empty
   where go :: HashMap Int Int -> CodegenAST -> (CodegenAST, HashSet Int)
-        go m (CLet e1 e2) | CLetRef v <- e1 = let (e2', used_vars) = go (Map.insert 0 (v + 1) (shiftRefMap m)) e2
+        go m (CLet e1 e2) | CLetRef v <- e1 = let (e2', used_vars) = go (HMap.insert 0 (v + 1) (shiftRefMap m)) e2
                                                   e2'' = shiftRef (-1) e2' in
                                                   (e2'', shiftSet (-1) used_vars)
                           | otherwise = let (e1', used_vars1) = go m e1
@@ -396,7 +399,7 @@ zapLets = fst . go Map.empty
                                             if Set.member 0 used_vars2
                                                then (CLet e1' e2', Set.unions [used_vars1, used_vars2'])
                                                else (shiftRef (-1) e2', used_vars2')
-        go m e@(CLetRef v) | Just v' <- Map.lookup v m = (CLetRef v', Set.singleton v')
+        go m e@(CLetRef v) | Just v' <- HMap.lookup v m = (CLetRef v', Set.singleton v')
                            | otherwise = (e, Set.singleton v)
         go m (CLambda sty ret e) = let (e', used_vars) = go m e in
                                        (CLambda sty ret e', used_vars)
@@ -436,16 +439,16 @@ shiftRef i (CLet e1 e2) = CLet (shiftRef i e1) (shiftRef i e2)
 shiftRef _ e = e
 
 shiftMap :: HashMap CodegenAST Int -> HashMap CodegenAST Int
-shiftMap = Map.foldrWithKey go Map.empty
-  where go e el = Map.insert (shiftRef 1 e) (el + 1)
+shiftMap = HMap.foldrWithKey go HMap.empty
+  where go e el = HMap.insert (shiftRef 1 e) (el + 1)
 
 shiftRefMap :: HashMap Int Int -> HashMap Int Int
-shiftRefMap = Map.foldrWithKey go Map.empty
-  where go e el = Map.insert (e + 1) (el + 1)
+shiftRefMap = HMap.foldrWithKey go HMap.empty
+  where go e el = HMap.insert (e + 1) (el + 1)
 
 shiftSet :: Int -> HashSet Int -> HashSet Int
 shiftSet i = Set.map (+ i)
 
 insertIfAbsent :: (Eq k, Hashable k) => k -> v -> HashMap k v -> HashMap k v
-insertIfAbsent k v = Map.alter (\case Just v' -> Just v'
-                                      Nothing -> Just v) k
+insertIfAbsent k v = HMap.alter (\case Just v' -> Just v'
+                                       Nothing -> Just v) k

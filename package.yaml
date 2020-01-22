@@ -37,6 +37,7 @@ dependencies:
   - storable-tuple
   - unordered-containers
   - hashable
+  - containers
 
 library:
   source-dirs: src

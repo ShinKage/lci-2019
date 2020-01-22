@@ -1,0 +1,5 @@
+(\f:int->int. f 4) (\x:int.x + 2)
+step
+codegen
+jit
+quit

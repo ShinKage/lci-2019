@@ -12,6 +12,7 @@ module Main where
 import           Control.Monad.Except
 import qualified Data.ByteString.Char8 as BS
 import           Data.Singletons
+import qualified Data.Map.Lazy as Map
 import           Data.Text
 import qualified Data.Text.Lazy.IO as TL
 import           Data.Text.Prettyprint.Doc
@@ -79,13 +80,13 @@ genIR :: (MonadError LabError m, MonadFix m, MonadIO m) => SLType ty -> AST '[] 
 genIR _ tast = do
   let Env { expr=e, decl=ds } = buildEnv tast
   renderPretty $ pretty ("Top-Level declarations:" :: String)
-  renderPretty . vsep . fmap prettyDecl $ ds
+  renderPretty . vsep . fmap (pretty . show) . Map.toAscList $ ds
   renderPretty $ pretty ("Body:" :: String)
-  renderPretty . prettyCodegenAST $ e
+  renderString . show $ e
     where prettyDecl Decl {argsType = as, body = b} =
             hcat (punctuate comma $ fmap pretty as)
               <+> colon
-              <+> prettyCodegenAST b
+              <+> pretty (show b)
 
 genLLVM :: (MonadError LabError m, MonadFix m, MonadIO m) => SLType ty -> AST '[] ty -> m ()
 genLLVM ty tast = do
@@ -95,6 +96,7 @@ genLLVM ty tast = do
       withPassManager defaultPassSetSpec $ \_ -> do
         verify m'
         moduleLLVMAssembly m' >>= BS.putStrLn
+-- genLLVM ty tast = wrapper ty (buildEnv tast) >>= liftIO . TL.putStrLn . PP.ppllvm
 
 evalAST :: MonadIO m => AST '[] ty -> m ()
 evalAST = renderPretty . prettyAST . ast . eval

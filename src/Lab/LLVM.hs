@@ -23,6 +23,8 @@ module Lab.LLVM where
 
 import Prelude hiding (EQ, and, or)
 import Data.String
+import Data.Map.Lazy (Map)
+import qualified Data.Map.Lazy as Map
 import Control.Monad.State
 import Control.Monad.Except
 import Data.Singletons
@@ -42,7 +44,7 @@ import Lab.Decls
 import Lab.Types
 import Lab.Errors
 
-data EnvState = EnvState { decls :: [Operand]
+data EnvState = EnvState { decls :: Map Int Operand
                          , args :: [Operand]
                          , lets :: [LazyLet]
                          , lastFun :: Int
@@ -58,15 +60,15 @@ data LazyLet = LazyLet { evaluated :: Operand
                        }
 
 emptyEnvState :: EnvState
-emptyEnvState = EnvState [] [] [] 0 Nothing LLVM.void "" False
+emptyEnvState = EnvState Map.empty [] [] 0 Nothing LLVM.void "" False
 
 -- | Wraps the generated code in a single function.
 wrapper :: (MonadFix m, MonadError LabError m) => SLType ty -> CodegenEnv -> m Module
 wrapper ty cenv = buildModuleT "exe" $ flip runStateT emptyEnvState $ do
-  decls' <- topLevelFunctions (decl cenv)
+  topLevelFunctions (decl cenv)
   function "expr" [] (labToLLVM $ fromSing ty) $ \[] -> mdo
     _ <- block `named` "entry"
-    modify $ \env -> env { decls = reverse decls', genBody = True, lastFunName = "expr" }
+    modify $ \env -> env { genBody = True, lastFunName = "expr" }
     e' <- codegen (expr cenv)
     ret e'
 
@@ -75,16 +77,16 @@ labToLLVM LInt  = i32
 labToLLVM LBool = i1
 labToLLVM LUnit = ptr i8
 labToLLVM (LProduct a b) = StructureType False [labToLLVM a, labToLLVM b]
-labToLLVM (LArrow _ _) = error "Expression must return a value"
+labToLLVM (LArrow a b) = ptr $ FunctionType (labToLLVM b) [labToLLVM a] False
 labToLLVM LVoid = error "Void cannot be instantiated"
 
 topLevelFunctions :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadModuleBuilder m)
-                  => [Declaration]
-                  -> m [Operand]
-topLevelFunctions decls' = forM (reverse decls') $ \dec -> mdo
+                  => Map Int Declaration
+                  -> m ()
+topLevelFunctions decls' = forM_ (Map.toDescList decls') $ \(idx, dec) -> mdo
     let argTypes = getArgTypes (argsType dec)
     let retty = labToLLVM $ retType dec
-    name <- getFunName
+    let name = fromString $ "fun_" ++ show idx
     f <- function name argTypes retty $ \args' -> do
       modify $ \env -> env { args = reverse args', lastFunOperand = Just f, lastFunRet = retty, lastFunName = name, lets = [] }
       _ <- block `named` "entry"
@@ -92,7 +94,7 @@ topLevelFunctions decls' = forM (reverse decls') $ \dec -> mdo
       modify $ \env -> env { args = [], lastFunOperand = Nothing, lastFunRet = LLVM.void, lastFunName = "", lets = [] }
       ret body'
     ds' <- gets decls
-    modify $ \env -> env { decls = ds' ++ [f] }
+    modify $ \env -> env { decls = Map.insert idx f ds' }
     pure f
 
   where argName :: Int -> ParameterName
@@ -159,13 +161,14 @@ callImpl :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBu
 callImpl i = do
   ds <- gets decls
   gen <- gets genBody
-  if gen
-    then case index' i ds of
+  -- if gen
+  --  then case lookup i ds of
+  case Map.lookup i ds of
            Just d -> pure d
            Nothing -> throwError (CodegenError "Function index out of range")
-    else case index' (length ds - i) ds of
-           Just d -> pure d
-           Nothing -> throwError (CodegenError "Function index out of range")
+  --   else case lookup (length ds - i) ds of
+  --          Just d -> pure d
+  --          Nothing -> throwError (CodegenError "Function index out of range")
 
 letImpl :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
         => CodegenAST
@@ -173,7 +176,7 @@ letImpl :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBui
         -> m Operand
 letImpl e1 e2 = do
   evloc <- alloca i1 (Just $ bit 0) 0x0
-  (vty, _) <- runIRBuilderT emptyIRBuilder $ codegen e1 >>= pure . typeOf
+  (vty, _) <- runIRBuilderT emptyIRBuilder $ (typeOf <$> codegen e1)
   valloc <- alloca vty Nothing 0x0
   let ll = LazyLet evloc valloc e1
   old <- gets lets
@@ -223,14 +226,9 @@ funCall :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBui
 funCall i params = do
   ds <- gets decls
   params' <- traverse (fmap (, []) . codegen) params
-  gen <- gets genBody
-  if gen
-    then case index' i ds of
-           Just d -> call d params'
-           Nothing -> throwError (CodegenError "Function index out of range")
-    else case index' (length ds - i) ds of
-           Just d -> call d params'
-           Nothing -> throwError (CodegenError "Function index out of range")
+  case Map.lookup i ds of
+    Just d -> call d params'
+    Nothing -> throwError $ CodegenError "Function index out of range"
 
 litInt :: MonadIRBuilder m => Integer -> m Operand
 litInt n = pure $ int32 n
