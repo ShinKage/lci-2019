@@ -1,4 +1,4 @@
-(pure 2) >>= (\x:int. (\y:int. pure (x + y) x))
+(\f:int->int, g:int->bool. g (f 42)) (\x:int.x / 5) (\x:int.x > 3)
 step
 codegen
 jit

@@ -1,0 +1,5 @@
+(pure 3) >>= (\x:int. pure (x + 3))
+step
+codegen
+jit
+quit

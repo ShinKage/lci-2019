@@ -1,3 +1,15 @@
+-------------------------------------------------------------------------------
+-- |
+-- Module      : Lab.Errors
+-- Description : Lab language errors.
+-- Copyright   : (c) Giuseppe Lomurno, 2019
+-- License     : ...
+-- Maintainer  : Giuseppe Lomurno <g.lomurno@studenti.unipi.it>
+-- Stability   : experimental
+-- Portability : non-portable (?)
+--
+-------------------------------------------------------------------------------
+
 module Lab.Errors where
 
 import Data.Singletons
@@ -18,6 +30,8 @@ data LabError
   | PairRequired (SomeSing LType) String
   -- | Parsing error, name reference is undefined.
   | UndefinedReference String
+  -- | Unsupported expression in Fix operator.
+  | UnsupportedFix String
   -- | Generic parsing error.
   | ParseError String
   -- | Generic code generation error.
@@ -65,6 +79,7 @@ prettyError (IOUnsupportedRead (SomeSing t) msg) =
        , indent 2 $ annotate (color Red) (pretty t)
        , pretty msg
        ]
+prettyError (UnsupportedFix msg) = pretty msg
 
 expectedType :: SLType t1 -> SLType t2 -> String -> LabError
 expectedType st1 st2 = ExpectedType (SomeSing st1) (SomeSing st2)
@@ -89,3 +104,6 @@ ioValueError st1 = IOValueError (SomeSing st1)
 
 ioUnsupportedRead :: SLType t1 -> String -> LabError
 ioUnsupportedRead st1 = IOUnsupportedRead (SomeSing st1)
+
+unsupportedFix :: String -> LabError
+unsupportedFix = UnsupportedFix

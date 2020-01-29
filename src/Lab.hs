@@ -33,6 +33,7 @@ import Lab.Errors ( LabError
                   , undefReference
                   , ioValueError
                   , ioUnsupportedRead
+                  , unsupportedFix
                   )
 
 import Lab.Eval ( Step(..)
