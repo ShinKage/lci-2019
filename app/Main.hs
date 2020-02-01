@@ -12,7 +12,9 @@ module Main where
 import           Control.Monad.Except
 import qualified Data.ByteString.Char8 as BS
 import           Data.Foldable
+import           Data.IORef
 import qualified Data.Map.Lazy as Map
+import qualified Data.Map.Strict as Strict
 import           Data.Singletons
 import           Data.Text
 import           Data.Text.Prettyprint.Doc
@@ -27,14 +29,22 @@ import qualified Foreign.Storable.Tuple ()
 import qualified Foreign.Ptr as FFI
 
 import qualified LLVM.AST as LLVM
-import           LLVM.Context as LLVM
-import           LLVM.Module as LLVM
-import           LLVM.PassManager as LLVM
-import           LLVM.Analysis as LLVM
-import           LLVM.Target as LLVM
+import           LLVM.Context
+import           LLVM.Linking (loadLibraryPermanently, getSymbolAddressInProcess)
+import           LLVM.Module
+import           LLVM.OrcJIT
+import           LLVM.OrcJIT.CompileLayer
+import           LLVM.Target
+import           LLVM.PassManager
+import           LLVM.Analysis
 import qualified LLVM.ExecutionEngine as LLVM
+import qualified LLVM.Relocation as Reloc
+import qualified LLVM.CodeModel as CodeModel
+import qualified LLVM.CodeGenOpt as CodeGenOpt
 
 import Lab
+
+import Debug.Trace
 
 main :: IO ()
 main = runLab repl >>= \case
@@ -113,34 +123,66 @@ stepAST = renderPretty . vsep . fmap prettyStep . stepDescent
           StepValue e' -> [StepAST $ ast e']
 
 interpretStepAST :: MonadIO m => AST '[] ty -> m ()
-interpretStepAST e = fmap (vsep . fmap prettyStep) (stepDescent e) >>= renderPretty
+interpretStepAST b = fmap (vsep . fmap prettyStep) (stepDescent b) >>= renderPretty
   where stepDescent :: MonadIO m => AST '[] ty -> m [Step ty]
         stepDescent e = do
           e' <- liftIO $ interpretStep e
           ds <- case e' of
-            StepAST e' -> stepDescent e'
-            StepValue e' -> pure [StepAST $ ast e']
+            StepAST e'' -> stepDescent e''
+            StepValue e'' -> pure [StepAST $ ast e'']
           pure $ StepAST e : ds
+
+resolver :: IRCompileLayer l -> SymbolResolver
+resolver compileLayer = SymbolResolver (\s -> findSymbol compileLayer s True)
 
 jit :: Context -> (LLVM.MCJIT -> IO a) -> IO a
 jit c = LLVM.withMCJIT c (Just 0) Nothing Nothing Nothing
 
 runJit :: (MonadError LabError m, MonadFix m, MonadIO m) => SLType ty -> AST '[] ty -> m ()
 runJit ty tast = do
+  resolvers <- liftIO $ newIORef Strict.empty
+  b <- liftIO $ loadLibraryPermanently (Just "./libexternaldynamic.so")
+  unless (not b) (error "Couldn't load library")
   m <- wrapper ty $ buildEnv tast
   liftIO $ withContext $ \context ->
-    withModuleFromAST context m $ \m' ->
-    withPassManager defaultPassSetSpec $ \_ -> do
+    withModuleFromAST context m $ \m' -> do
       verify m'
       moduleLLVMAssembly m' >>= BS.putStrLn
-      jit context $ \executionEngine ->
-        LLVM.withModuleInEngine executionEngine m' $ \ee ->
-        LLVM.getFunction ee (LLVM.Name "lab_main") >>= \case
-          Just fn -> ffiRet ty $ \(_, retty, free) -> do
-            c <- FFI.callFFI fn retty []
-            print c
-            free
-          Nothing -> putStrLn "Error?"
+      withHostTargetMachine Reloc.PIC CodeModel.Default CodeGenOpt.Default $ \tm ->
+        -- withHostTargetMachineDefault $ \tm ->
+        withExecutionSession $ \es ->
+        withObjectLinkingLayer es (\k -> fmap (Strict.! k) (readIORef resolvers)) $ \linkingLayer ->
+        withIRCompileLayer linkingLayer tm $ \compileLayer ->
+        withModuleKey es $ \k ->
+          withSymbolResolver es (resolver compileLayer) $ \resolver -> do
+            modifyIORef' resolvers (Strict.insert k resolver)
+            withModule compileLayer k m' $
+              withPassManager defaultPassSetSpec $ \_ -> do
+                -- verify m'
+                -- moduleLLVMAssembly m' >>= BS.putStrLn
+                mainSymbol <- mangleSymbol compileLayer "lab_main"
+                readSymbol <- mangleSymbol compileLayer "read_int"
+                -- Right (JITSymbol mainFn _) <- findSymbol compileLayer mainSymbol True
+                mangled <- findSymbol compileLayer mainSymbol True
+                mangled2 <- findSymbol compileLayer readSymbol True
+                traceShowM mainSymbol
+                traceShowM readSymbol
+                traceShowM mangled
+                traceShowM mangled2
+                let Right (JITSymbol mainFn _) = mangled
+                let fnPtr = FFI.castPtrToFunPtr (FFI.wordPtrToPtr mainFn)
+                ffiRet ty $ \(_, retty, free) -> do
+                  c <- FFI.callFFI fnPtr retty []
+                  print c
+                  free
+                  -- jit context $ \executionEngine ->
+                  --   LLVM.withModuleInEngine executionEngine m' $ \ee ->
+                  --   LLVM.getFunction ee (LLVM.Name "lab_main") >>= \case
+                  --     Just fn -> ffiRet ty $ \(_, retty, free) -> do
+                  --       c <- FFI.callFFI fn retty []
+                  --       print c
+                  --       free
+                  --     Nothing -> putStrLn "Error?"
 
 -- FIXME: Nested pairs
 ffiRet :: SLType ty -> (forall t. (Show t, FFI.Storable t) => (FFI.Ptr FFI.CType, FFI.RetType t, IO ()) -> IO r) -> IO r

@@ -48,6 +48,9 @@ data EnvState = EnvState { decls :: Map Int Operand
                          , lets :: [LazyLet]
                          , lastFunOperand :: Maybe Operand
                          , lastFunRet :: AST.Type
+                         , readIntFun :: Operand
+                         , readBoolFun :: Operand
+                         , readUnitFun :: Operand
                          }
 
 data LazyLet = LazyLet { evaluated :: Operand
@@ -55,17 +58,21 @@ data LazyLet = LazyLet { evaluated :: Operand
                        , code :: CodegenAST
                        }
 
-emptyEnvState :: EnvState
+emptyEnvState :: Operand -> Operand -> Operand -> EnvState
 emptyEnvState = EnvState Map.empty [] [] Nothing LLVM.void
 
 -- | Wraps the generated code in a single function with lifted lambdas.
 wrapper :: (MonadFix m, MonadError LabError m) => SLType ty -> CodegenEnv -> m Module
-wrapper ty cenv = buildModuleT "exe" $ flip runStateT emptyEnvState $ do
-  topLevelFunctions (decl cenv)
-  function "lab_main" [] (labToLLVM $ fromSing ty) $ \[] -> mdo
-    _ <- block `named` "entry"
-    e' <- codegen $ expr cenv
-    ret e'
+wrapper ty cenv = buildModuleT "exe" $ do
+  rInt <- extern "read_int" [] i32
+  rBool <- extern "read_bool" [] i1
+  rUnit <- extern "read_unit" [] (ptr i8)
+  flip runStateT (emptyEnvState rInt rBool rUnit) $ do
+    topLevelFunctions (decl cenv)
+    function "lab_main" [] (labToLLVM $ fromSing ty) $ \[] -> mdo
+      _ <- block `named` "entry"
+      e' <- codegen $ expr cenv
+      ret e'
 
 -- | Generate the code for lifted lambda abstractions.
 topLevelFunctions :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadModuleBuilder m)
@@ -111,7 +118,15 @@ codegen (CLet e1 e2)             = letImpl e1 e2
 codegen (CLetRef i)              = letRef i
 codegen (CIOPure e)              = codegen e
 codegen (CIOBind e1 e2)          = codegen (CApp e2 e1)
-codegen (CIOPrimRead t)          = undefined
+codegen (CIOPrimRead t)          = primRead t
+
+primRead :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
+         => LType
+         -> m Operand
+primRead LInt = gets readIntFun >>= flip call []
+primRead LBool = gets readBoolFun >>= flip call []
+primRead LUnit = gets readUnitFun >>= flip call []
+primRead _ = throwError $ CodegenError "Primitive read operations supports only integers, bools and units"
 
 recToken :: (MonadState EnvState m, MonadError LabError m, MonadFix m, MonadIRBuilder m)
          => m Operand

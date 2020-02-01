@@ -148,7 +148,7 @@ prettyAST' gamma = flip runReader initPrec . go gamma
           e2' <- local (const initPrec) $ go env e2
           prec <- ask
           pure $ maybeParens (prec >= initPrec) $ e1' <+> pretty ">>=" <+> e2'
-        go env (IOPrimRead ty) = pure $ pretty "read" <+> pretty ty
+        go _ (IOPrimRead ty) = pure $ pretty "read" <+> pretty ty
 --         go env (IOPrimShow e) = do
 --           e' <- local (const initPrec) $ go env e
 --           prec <- ask

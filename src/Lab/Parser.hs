@@ -89,6 +89,7 @@ parseExpr = foldl1 UApp <$> sepBy1 atom spaceConsumer
 atom :: Parser Untyped
 atom = try (literal "()" $> UUnitE)
   <|> choice [ parens parseLanguage
+             , UIOPrimRead <$> (literal "read" >> types)
              , UIntE <$> lexeme L.decimal
              , UBoolE <$> ((literal "true" $> True) <|> (literal "false" $> False))
              , cond
