@@ -11,7 +11,7 @@ To execute tests: `stack test`
 ### CLI
 At this time, the executable parses a single valid expression that can be interpreted or compiled to the LLVM IR for JIT compilation or ASM compilation. The supported commands are:
 - `eval`: the expression will be interpreted and the result printed to the stdout
-- step: each step of the expression interpretation will be printed
+- `step`: each step of the expression interpretation will be printed
 - `jit`: execute the expression inside the CLI using a LLVM JIT (only a subset of the language is supported)
 - `llvm`: prints the generated LLVM IR (only a subset of the language is supported)
 - `compile`: prints the generated ASM from the LLVM IR compilation (only a subset of the language is supported)
@@ -19,7 +19,5 @@ At this time, the executable parses a single valid expression that can be interp
 - `typed`: prints the typed AST
 - `untyped`: prints the untyped AST obtained from parsing
 - `codegen`: prints the IR produced for the LLVM IR code generation
+- `expr`: evaluates another expression
 - `quit`: exits the CLI
-
-## TODO (?)
-- [ ] Finish the typechecker and evaluator formal specification
