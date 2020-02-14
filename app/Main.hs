@@ -62,6 +62,7 @@ cmdLoop uast sty tast = prompt "cmd> " >>= \case
   Just "jit"     -> runJit sty tast >> cmdLoop uast sty tast
   Just "compile" -> genASM sty tast >> cmdLoop uast sty tast
   Just "expr"    -> repl
+  Just "help"    -> printHelp >> cmdLoop uast sty tast
   Just "quit"    -> quit
   Just _         -> liftIO (putStrLn "invalid command") >> cmdLoop uast sty tast
   Nothing        -> pure ()
@@ -150,3 +151,23 @@ genASM ty tast = do
       BS.putStrLn s
       withHostTargetMachineDefault $ \tm ->
         moduleTargetAssembly tm m' >>= BS.putStrLn
+
+printHelp :: MonadIO m => m ()
+printHelp = liftIO $ do
+  putStrLn "List of available modes:"
+  putStrLn "  expr  an expression is expected as input"
+  putStrLn "  cmd   a command is expected as input"
+  putStrLn ""
+  putStrLn "List of available commands:"
+  putStrLn "  untyped    prints the untyped IR (DEBUG only)"
+  putStrLn "  typed      prints the typed IR (DEBUG only)"
+  putStrLn "  eval       fully evaluates the expression"
+  putStrLn "  step       stepped evaluation on the expression"
+  putStrLn "  pretty     pretty prints the expression"
+  putStrLn "  codegen    prints the codegen IR (DEBUG only)"
+  putStrLn "  llvm       prints the generated LLVM IR"
+  putStrLn "  jit        fully evaluates the expression via LLVM JIT"
+  putStrLn "  compile    prints machine assembly from the expression via LLVM"
+  putStrLn "  expr       parses a new expression"
+  putStrLn "  help       prints this help message"
+  putStrLn "  quit       quits the modal REPL"
